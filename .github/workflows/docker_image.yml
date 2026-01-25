@@ -1,4 +1,4 @@
-name: Build & Push Technical Agent
+name: Build & Push Scanner Agent
 
 on:
   push:
@@ -21,4 +21,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: painaidee/technical-agent:latest
+          tags: painaidee/scanner-agent:latest
