@@ -1,5 +1,4 @@
 from fastapi import FastAPI, HTTPException
-from typing import List
 from app.services.scanner import scan_market
 from app.models import ScanRequest, ScanResponse, ScanData
 
@@ -16,12 +15,14 @@ DEFAULT_SYMBOLS = [
     "INTUCH", "MINT", "CRC", "OR"
 ]
 
+
 @app.get("/health")
 def health_check():
     """
     Healthcheck endpoint for Docker.
     """
     return {"status": "ok"}
+
 
 @app.post("/scan", response_model=ScanResponse)
 def scan_stocks(request: ScanRequest):
@@ -32,7 +33,9 @@ def scan_stocks(request: ScanRequest):
     symbols_to_scan = request.symbols if request.symbols else DEFAULT_SYMBOLS
 
     if not symbols_to_scan:
-        raise HTTPException(status_code=400, detail="Symbol list cannot be empty if provided.")
+        raise HTTPException(
+            status_code=400, detail="Symbol list cannot be empty if provided."
+        )
 
     candidates, errors = scan_market(symbols=symbols_to_scan)
 
