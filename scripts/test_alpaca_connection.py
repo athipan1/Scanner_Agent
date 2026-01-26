@@ -1,5 +1,4 @@
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetAccountRequest
 import os
 import sys
 
