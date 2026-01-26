@@ -1,23 +1,29 @@
-import alpaca_trade_api as tradeapi
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetAccountRequest
 import os
 import sys
 
 def test_alpaca_connection():
     """
-    Tests the connection to the Alpaca API using credentials from environment variables.
+    Tests the connection to the Alpaca API using the alpaca-py SDK.
     Exits with code 0 on success, 1 on failure.
     """
     api_key = os.getenv("APCA_API_KEY_ID")
     secret_key = os.getenv("APCA_API_SECRET_KEY")
-    base_url = os.getenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets")
+
+    # Paper trading is the default, which is what we want for testing.
+    # The SDK automatically uses the paper endpoint if paper=True.
 
     if not api_key or not secret_key:
         print("Error: APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set as environment variables.")
         sys.exit(1)
 
     try:
-        api = tradeapi.REST(api_key, secret_key, base_url, api_version='v2')
-        account = api.get_account()
+        # Initialize the trading client
+        trading_client = TradingClient(api_key, secret_key, paper=True)
+
+        # Get account information
+        account = trading_client.get_account()
 
         if account.status == 'ACTIVE':
             print("Successfully connected to Alpaca API.")

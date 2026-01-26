@@ -7,11 +7,9 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-# A default list of top 20 Thai stocks for testing purposes
+# A default list of US tech stocks for testing purposes
 DEFAULT_SYMBOLS = [
-    "PTT", "AOT", "DELTA", "CPALL", "BBL", "SCB", "KBANK", "GULF",
-    "ADVANC", "SCC", "BDMS", "PTTEP", "EA", "CPN", "TRUE", "HMPRO",
-    "INTUCH", "MINT", "CRC", "OR"
+    "AAPL", "GOOG", "MSFT", "AMZN", "NVDA", "META", "TSLA"
 ]
 
 app = FastAPI(

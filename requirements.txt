@@ -3,3 +3,4 @@ uvicorn[standard]
 tradingview-ta
 yfinance
 pydantic-settings
+alpaca-py
