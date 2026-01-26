@@ -3,6 +3,9 @@ from typing import List
 from app.services.scanner import scan_market
 from app.services.long_term_scanner import scan_long_term
 from app.models import ScanRequest, ScanResponse, ScanData, FundamentalScanResponse, FundamentalScanData
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # A default list of top 20 Thai stocks for testing purposes
 DEFAULT_SYMBOLS = [

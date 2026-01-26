@@ -2,7 +2,6 @@ import yfinance as yf
 from typing import Optional, Dict, Any
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_market_data(symbol: str) -> Optional[Dict[str, Any]]:
