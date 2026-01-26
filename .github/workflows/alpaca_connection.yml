@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install alpaca-py
+          pip install -r requirements.txt
 
       - name: Run Alpaca Connection Test
         env:
