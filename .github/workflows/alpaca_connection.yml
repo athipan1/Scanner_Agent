@@ -17,8 +17,8 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install alpaca-trade-api
-        run: pip install alpaca-trade-api
+      - name: Install alpaca-py
+        run: pip install alpaca-py
 
       - name: Run Alpaca Connection Test
         env:
