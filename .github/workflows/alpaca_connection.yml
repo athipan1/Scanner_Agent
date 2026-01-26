@@ -8,6 +8,7 @@ on:
 jobs:
   test-alpaca-connection:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out repository code
         uses: actions/checkout@v3
@@ -17,8 +18,10 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install alpaca-py
-        run: pip install alpaca-py
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install alpaca-py
 
       - name: Run Alpaca Connection Test
         env:
