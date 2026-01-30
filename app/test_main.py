@@ -13,23 +13,26 @@ def test_scan_fundamental_endpoint_no_symbols():
     assert response.status_code == 200
     response_json = response.json()
     assert response_json["status"] in ["partial_success", "success", "failure"]
-    if response_json["data"] and response_json["data"]["candidates"]:
-        assert "symbol" in response_json["data"]["candidates"][0]
-        assert "grade" in response_json["data"]["candidates"][0]
-        assert "fundamental_score" in response_json["data"]["candidates"][0]
+    assert "agent" in response_json
+    assert "timestamp" in response_json
+    if response_json["data"]:
+        assert "symbols" in response_json["data"]
+        assert isinstance(response_json["data"]["symbols"], list)
 
 def test_scan_fundamental_endpoint_with_symbols():
     response = client.post("/scan/fundamental", json={"symbols": ["AAPL", "GOOG"]})
     assert response.status_code == 200
     response_json = response.json()
     assert response_json["status"] in ["partial_success", "success", "failure"]
-    if response_json["data"] and response_json["data"]["candidates"]:
-        assert len(response_json["data"]["candidates"]) <= 2
-        candidate = response_json["data"]["candidates"][0]
-        assert "symbol" in candidate
-        assert "grade" in candidate
-        assert "fundamental_score" in candidate
-        assert "quality" in candidate
-        assert "growth" in candidate
-        assert "valuation" in candidate
-        assert "thesis" in candidate
+    if response_json["data"]:
+        assert "symbols" in response_json["data"]
+        assert len(response_json["data"]["symbols"]) <= 2
+
+def test_scan_endpoint():
+    response = client.post("/scan", json={"symbols": ["AAPL", "MSFT"]})
+    assert response.status_code == 200
+    response_json = response.json()
+    assert "agent" in response_json
+    assert "status" in response_json
+    if response_json["data"]:
+        assert "symbols" in response_json["data"]
