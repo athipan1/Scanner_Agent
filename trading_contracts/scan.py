@@ -1,6 +1,10 @@
 from typing import List, Optional
 from pydantic import BaseModel
 
+class CandidateResult(BaseModel):
+    symbol: str
+    confidence_score: Optional[float] = None
+    recommendation: Optional[str] = None
+
 class ScanResult(BaseModel):
-    symbols: List[str]
-    score: Optional[float] = None
+    candidates: List[CandidateResult]
