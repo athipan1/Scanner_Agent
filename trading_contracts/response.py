@@ -1,10 +1,11 @@
-from typing import Any, Optional, List
+from typing import Any, Optional, Dict
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 
 class StandardResponse(BaseModel):
     agent_type: str = "scanner"
     status: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    version: str = "1.0.0"
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     data: Optional[Any] = None
-    errors: Optional[List[Any]] = None
+    error: Optional[Dict[str, Any]] = None

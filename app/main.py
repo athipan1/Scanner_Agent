@@ -66,10 +66,11 @@ def scan_stocks(request: ScanRequest):
                     recommendation=recommendation
                 ))
 
+    error_dict = {e.symbol: e.error for e in errors} if errors else None
     return StandardResponse(
         status=status,
         data=ScanResult(candidates=candidates) if candidates else None,
-        errors=errors if errors else None
+        error=error_dict
     )
 
 @app.post("/scan/fundamental", response_model=StandardResponse)
@@ -101,8 +102,9 @@ def scan_fundamental_stocks(request: ScanRequest):
                     recommendation=c.get("grade")
                 ))
 
+    error_dict = {e.symbol: e.error for e in errors} if errors else None
     return StandardResponse(
         status=status,
         data=ScanResult(candidates=candidates) if candidates else None,
-        errors=errors if errors else None
+        error=error_dict
     )
