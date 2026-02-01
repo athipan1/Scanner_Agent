@@ -53,17 +53,17 @@ Scanner_Agent เป็นระบบสแกนตลาดหุ้นอั
 ### StandardResponse (รูปแบบการตอบกลับมาตรฐาน)
 | ฟิลด์ | ชนิดข้อมูล | คำอธิบาย |
 | :--- | :--- | :--- |
-| `agent` | `str` | ชื่อของ Agent (ค่าเริ่มต้นคือ "Scanner_Agent") |
-| `status` | `str` | สถานะการทำงาน (`success`, `partial_success`, `failure`) |
-| `timestamp` | `datetime` | เวลาที่ประมวลผลเสร็จสิ้น (UTC) |
+| `agent_type` | `str` | ชนิดของ Agent (ค่าเริ่มต้นคือ "scanner") |
+| `status` | `str` | สถานะการทำงาน (`success` หรือ `error`) |
+| `version` | `str` | เวอร์ชั่นของ API (เช่น "1.0.0") |
+| `timestamp` | `str` | เวลาที่ประมวลผลเสร็จสิ้นในรูปแบบ ISO-8601 |
 | `data` | `ScanResult` \| `null` | ข้อมูลผลลัพธ์จากการสแกน |
-| `errors` | `List[ErrorDetail]` \| `null` | รายการข้อผิดพลาดที่เกิดขึ้นระหว่างประมวลผลแต่ละหุ้น |
+| `error` | `dict` \| `null` | รายละเอียดข้อผิดพลาด (เช่น `{"SYMBOL": "Error Message"}`) |
 
 ### ScanResult (ข้อมูลผลลัพธ์)
 | ฟิลด์ | ชนิดข้อมูล | คำอธิบาย |
 | :--- | :--- | :--- |
-| `symbols` | `List[str]` | รายชื่อหุ้นที่ผ่านเกณฑ์การคัดเลือก |
-| `score` | `float` \| `null` | คะแนนรวมเฉลี่ย (มีค่าเฉพาะการสแกนปัจจัยพื้นฐาน 0.0 - 1.0) |
+| `candidates` | `List[CandidateResult]` | รายการหุ้นที่ผ่านเกณฑ์การคัดเลือก |
 
 ---
 
@@ -79,32 +79,34 @@ Scanner_Agent เป็นระบบสแกนตลาดหุ้นอั
 ### 2. ผลลัพธ์จากการสแกนทางเทคนิค (Response - /scan)
 ```json
 {
-  "agent": "Scanner_Agent",
+  "agent_type": "scanner",
   "status": "success",
-  "timestamp": "2023-10-27T10:00:00Z",
+  "version": "1.0.0",
+  "timestamp": "2023-10-27T10:00:00.000000+00:00",
   "data": {
-    "symbols": ["PTT", "KBANK"],
-    "score": null
+    "candidates": [
+      {"symbol": "PTT", "confidence_score": null, "recommendation": "BUY"},
+      {"symbol": "KBANK", "confidence_score": null, "recommendation": "STRONG_BUY"}
+    ]
   },
-  "errors": null
+  "error": null
 }
 ```
 
 ### 3. ผลลัพธ์จากการสแกนปัจจัยพื้นฐาน (Response - /scan/fundamental)
 ```json
 {
-  "agent": "Scanner_Agent",
-  "status": "partial_success",
-  "timestamp": "2023-10-27T10:05:00Z",
+  "agent_type": "scanner",
+  "status": "success",
+  "version": "1.0.0",
+  "timestamp": "2023-10-27T10:05:00.000000+00:00",
   "data": {
-    "symbols": ["ADVANC"],
-    "score": 0.85
+    "candidates": [
+      {"symbol": "ADVANC", "confidence_score": 0.85, "recommendation": "A"}
+    ]
   },
-  "errors": [
-    {
-      "symbol": "PTT",
-      "error": "Missing essential financial or market data"
-    }
-  ]
+  "error": {
+    "PTT": "Missing essential financial or market data"
+  }
 }
 ```
