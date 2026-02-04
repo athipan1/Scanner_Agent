@@ -13,7 +13,8 @@ def test_health_check():
     assert json_data["version"] == "1.0.0"
     assert "timestamp" in json_data
     # Verify ISO-8601 format
-    datetime.fromisoformat(json_data["timestamp"])
+    ts = json_data["timestamp"].replace("Z", "+00:00")
+    datetime.fromisoformat(ts)
     assert json_data["data"] == {"message": "healthy"}
     assert "error" in json_data
 
