@@ -1,11 +1,12 @@
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, Union, Literal
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
+from trading_contracts.scan import ScannerResult
 
-class StandardResponse(BaseModel):
+class StandardAgentResponse(BaseModel):
     agent_type: str = "scanner"
-    status: str
+    status: Literal["success", "error"]
     version: str = "1.0.0"
-    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    data: Optional[Any] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    data: Optional[Union[ScannerResult, Dict[str, Any], Any]] = None
     error: Optional[Dict[str, Any]] = None

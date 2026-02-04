@@ -6,5 +6,5 @@ class CandidateResult(BaseModel):
     confidence_score: Optional[float] = None
     recommendation: Optional[str] = None
 
-class ScanResult(BaseModel):
+class ScannerResult(BaseModel):
     candidates: List[CandidateResult]
