@@ -3,8 +3,8 @@ from typing import List
 from app.services.scanner import scan_market
 from app.services.long_term_scanner import scan_long_term
 from app.models import ScanRequest
-from trading_contracts.scan import ScanResult, CandidateResult
-from trading_contracts.response import StandardResponse
+from trading_contracts.scan import ScannerResult, CandidateResult
+from trading_contracts.response import StandardAgentResponse
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -27,18 +27,18 @@ DEFAULT_SYMBOLS = [
     "INTUCH", "MINT", "CRC", "OR"
 ]
 
-@app.get("/health", response_model=StandardResponse)
+@app.get("/health", response_model=StandardAgentResponse)
 def health_check():
     """
     Healthcheck endpoint for Docker.
     """
-    return StandardResponse(
+    return StandardAgentResponse(
         agent_type="scanner",
         status="success",
         data={"message": "healthy"}
     )
 
-@app.post("/scan", response_model=StandardResponse)
+@app.post("/scan", response_model=StandardAgentResponse)
 def scan_stocks(request: ScanRequest):
     """
     Accepts a list of symbols to scan. If the list is empty,
@@ -67,13 +67,14 @@ def scan_stocks(request: ScanRequest):
                 ))
 
     error_dict = {e.symbol: e.error for e in errors} if errors else None
-    return StandardResponse(
+    return StandardAgentResponse(
+        agent_type="scanner",
         status=status,
-        data=ScanResult(candidates=candidates) if candidates else None,
+        data=ScannerResult(candidates=candidates) if candidates else None,
         error=error_dict
     )
 
-@app.post("/scan/fundamental", response_model=StandardResponse)
+@app.post("/scan/fundamental", response_model=StandardAgentResponse)
 def scan_fundamental_stocks(request: ScanRequest):
     """
     Accepts a list of symbols to scan for long-term investment opportunities.
@@ -103,8 +104,9 @@ def scan_fundamental_stocks(request: ScanRequest):
                 ))
 
     error_dict = {e.symbol: e.error for e in errors} if errors else None
-    return StandardResponse(
+    return StandardAgentResponse(
+        agent_type="scanner",
         status=status,
-        data=ScanResult(candidates=candidates) if candidates else None,
+        data=ScannerResult(candidates=candidates) if candidates else None,
         error=error_dict
     )
