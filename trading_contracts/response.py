@@ -1,4 +1,4 @@
-from typing import Any, Optional, Dict, Union, Literal
+from typing import Any, Optional, Dict, Union, Literal, List
 from pydantic import BaseModel, Field
 from datetime import datetime, timezone
 from trading_contracts.scan import ScannerResult
