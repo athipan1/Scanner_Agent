@@ -56,21 +56,18 @@ def scan_stocks(request: ScanRequest):
 
     candidates = []
     if candidates_raw:
-        for c in candidates_raw:
-            symbol = c.symbol if hasattr(c, "symbol") else c.get("symbol")
-            recommendation = c.recommendation if hasattr(c, "recommendation") else c.get("recommendation")
-            if symbol:
-                candidates.append(CandidateResult(
-                    symbol=symbol,
-                    confidence_score=None,
-                    recommendation=recommendation
-                ))
+        candidates = [c.symbol if hasattr(c, "symbol") else c.get("symbol") for c in candidates_raw]
+        candidates = [c for c in candidates if c]
 
     error_dict = {e.symbol: e.error for e in errors} if errors else None
     return StandardAgentResponse(
         agent_type="scanner",
         status=status,
-        data=ScannerResult(candidates=candidates) if candidates else None,
+        data=ScannerResult(
+            scan_type="technical",
+            count=len(candidates),
+            candidates=candidates
+        ),
         error=error_dict
     )
 
@@ -92,21 +89,16 @@ def scan_fundamental_stocks(request: ScanRequest):
 
     candidates = []
     if candidates_raw:
-        for c in candidates_raw:
-            symbol = c.get("symbol")
-            # fundamental_score is 0-100, normalize to 0-1
-            score = c.get("fundamental_score", 0) / 100.0
-            if symbol:
-                candidates.append(CandidateResult(
-                    symbol=symbol,
-                    confidence_score=score,
-                    recommendation=c.get("grade")
-                ))
+        candidates = [c.get("symbol") for c in candidates_raw if c.get("symbol")]
 
     error_dict = {e.symbol: e.error for e in errors} if errors else None
     return StandardAgentResponse(
         agent_type="scanner",
         status=status,
-        data=ScannerResult(candidates=candidates) if candidates else None,
+        data=ScannerResult(
+            scan_type="fundamental",
+            count=len(candidates),
+            candidates=candidates
+        ),
         error=error_dict
     )

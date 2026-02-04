@@ -27,9 +27,13 @@ def test_scan_fundamental_endpoint_no_symbols():
     assert "version" in response_json
     assert "timestamp" in response_json
     assert "error" in response_json
-    if response_json["data"]:
-        assert "candidates" in response_json["data"]
-        assert isinstance(response_json["data"]["candidates"], list)
+    assert "data" in response_json
+    data = response_json["data"]
+    assert data["scan_type"] == "fundamental"
+    assert "count" in data
+    assert "candidates" in data
+    assert isinstance(data["candidates"], list)
+    assert data["count"] == len(data["candidates"])
 
 def test_scan_fundamental_endpoint_with_symbols():
     response = client.post("/scan/fundamental", json={"symbols": ["AAPL", "GOOG"]})
@@ -38,9 +42,12 @@ def test_scan_fundamental_endpoint_with_symbols():
     assert response_json["status"] in ["success", "error"]
     assert "version" in response_json
     assert "error" in response_json
-    if response_json["data"]:
-        assert "candidates" in response_json["data"]
-        assert len(response_json["data"]["candidates"]) <= 2
+    assert "data" in response_json
+    data = response_json["data"]
+    assert data["scan_type"] == "fundamental"
+    assert "count" in data
+    assert "candidates" in data
+    assert data["count"] <= 2
 
 def test_scan_endpoint():
     response = client.post("/scan", json={"symbols": ["AAPL", "MSFT"]})
@@ -50,5 +57,9 @@ def test_scan_endpoint():
     assert "status" in response_json
     assert "version" in response_json
     assert "error" in response_json
-    if response_json["data"]:
-        assert "candidates" in response_json["data"]
+    assert "data" in response_json
+    data = response_json["data"]
+    assert data["scan_type"] == "technical"
+    assert "count" in data
+    assert "candidates" in data
+    assert isinstance(data["candidates"], list)

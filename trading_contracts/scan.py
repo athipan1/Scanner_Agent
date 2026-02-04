@@ -7,4 +7,6 @@ class CandidateResult(BaseModel):
     recommendation: Optional[str] = None
 
 class ScannerResult(BaseModel):
-    candidates: List[CandidateResult]
+    scan_type: str
+    count: int
+    candidates: List[str]
