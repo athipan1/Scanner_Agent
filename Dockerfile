@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 # Copy the app directory into the container at /code
 COPY ./app /code/app
 
-# Expose port 8000 to the outside world
-EXPOSE 8000
+# Expose port 8006 to the outside world
+EXPOSE 8006
 
 # Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006"]
