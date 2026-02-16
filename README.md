@@ -49,6 +49,8 @@ Scanner_Agent เป็นระบบสแกนตลาดหุ้นอั
 | ฟิลด์ | ชนิดข้อมูล | คำอธิบาย |
 | :--- | :--- | :--- |
 | `symbols` | `List[str]` (Optional) | รายชื่อสัญลักษณ์หุ้นที่ต้องการสแกน (เช่น `["PTT", "CPALL"]`) หากไม่ระบุจะใช้รายชื่อหุ้นเริ่มต้น |
+| `screener` | `str` (Optional) | ตลาดที่ต้องการสแกน (ค่าเริ่มต้นคือ "thailand") |
+| `exchange` | `str` (Optional) | ตลาดหลักทรัพย์ (ค่าเริ่มต้นคือ "SET") |
 
 ### StandardResponse (รูปแบบการตอบกลับมาตรฐาน)
 | ฟิลด์ | ชนิดข้อมูล | คำอธิบาย |
@@ -63,7 +65,7 @@ Scanner_Agent เป็นระบบสแกนตลาดหุ้นอั
 ### ScanResult (ข้อมูลผลลัพธ์)
 | ฟิลด์ | ชนิดข้อมูล | คำอธิบาย |
 | :--- | :--- | :--- |
-| `candidates` | `List[CandidateResult]` | รายการหุ้นที่ผ่านเกณฑ์การคัดเลือก |
+| `candidates` | `List[str]` | รายชื่อสัญลักษณ์หุ้นที่ผ่านเกณฑ์การคัดเลือก |
 
 ---
 
@@ -84,10 +86,9 @@ Scanner_Agent เป็นระบบสแกนตลาดหุ้นอั
   "version": "1.0.0",
   "timestamp": "2023-10-27T10:00:00.000000+00:00",
   "data": {
-    "candidates": [
-      {"symbol": "PTT", "confidence_score": null, "recommendation": "BUY"},
-      {"symbol": "KBANK", "confidence_score": null, "recommendation": "STRONG_BUY"}
-    ]
+    "scan_type": "technical",
+    "count": 2,
+    "candidates": ["PTT", "KBANK"]
   },
   "error": null
 }
@@ -101,9 +102,9 @@ Scanner_Agent เป็นระบบสแกนตลาดหุ้นอั
   "version": "1.0.0",
   "timestamp": "2023-10-27T10:05:00.000000+00:00",
   "data": {
-    "candidates": [
-      {"symbol": "ADVANC", "confidence_score": 0.85, "recommendation": "A"}
-    ]
+    "scan_type": "fundamental",
+    "count": 1,
+    "candidates": ["ADVANC"]
   },
   "error": {
     "PTT": "Missing essential financial or market data"

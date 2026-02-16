@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field
 
 class ScanRequest(BaseModel):
     symbols: Optional[List[str]] = Field(default=None, description="A list of stock symbols to scan. Defaults to a predefined list if empty.")
+    screener: str = Field(default="thailand", description="The TradingView screener to use (e.g., 'thailand', 'america').")
+    exchange: str = Field(default="SET", description="The stock exchange to use (e.g., 'SET', 'NASDAQ', 'NYSE').")
 
 class Candidate(BaseModel):
     symbol: str
