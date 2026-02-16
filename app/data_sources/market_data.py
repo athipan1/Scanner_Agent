@@ -4,16 +4,18 @@ from app.config import settings
 import yfinance as yf
 from typing import Optional, Dict, Any
 import logging
+from app.utils.symbol_mapper import map_symbol_for_yfinance
 
 logger = logging.getLogger(__name__)
 
-def get_market_data(symbol: str) -> Optional[Dict[str, Any]]:
+def get_market_data(symbol: str, exchange: str = "SET") -> Optional[Dict[str, Any]]:
     """
     Fetches current market data for a given stock symbol using a combination
     of Alpaca for the latest price and yfinance for valuation metrics.
 
     Args:
         symbol (str): The stock symbol (e.g., "AAPL").
+        exchange (str): The stock exchange (e.g., "SET", "NASDAQ").
 
     Returns:
         Optional[Dict[str, Any]]: A dictionary containing key market data,
@@ -41,7 +43,8 @@ def get_market_data(symbol: str) -> Optional[Dict[str, Any]]:
 
     # --- 2. Fetch valuation metrics from yfinance ---
     try:
-        stock = yf.Ticker(symbol)
+        yf_symbol = map_symbol_for_yfinance(symbol, exchange)
+        stock = yf.Ticker(yf_symbol)
         info = stock.info
 
         # If Alpaca failed, fall back to yfinance for price

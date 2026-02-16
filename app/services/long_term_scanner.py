@@ -4,14 +4,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.data_sources import financial_statements, market_data
 from app.analyzers import quality_analyzer, growth_analyzer, valuation_analyzer
 from app.scoring import fundamental_score
-from app.models import ErrorDetail
+from app.models import ErrorDetail, FundamentalCandidate, QualityMetrics, GrowthMetrics, ValuationMetrics
 
-def analyze_stock(symbol: str) -> Tuple[str, Dict[str, Any]]:
+def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalCandidate]:
     """
     Performs a full fundamental analysis on a single stock symbol.
     """
-    financials = financial_statements.get_financials(symbol)
-    market = market_data.get_market_data(symbol)
+    financials = financial_statements.get_financials(symbol, exchange)
+    market = market_data.get_market_data(symbol, exchange)
 
     if not financials or not market:
         raise ValueError("Missing essential financial or market data")
@@ -61,16 +61,17 @@ def analyze_stock(symbol: str) -> Tuple[str, Dict[str, Any]]:
         f"The stock appears {'undervalued' if valuation_score > 70 else 'fairly valued'}."
     )
 
-    return symbol, {
-        "grade": grade,
-        "fundamental_score": round(final_score, 2),
-        "quality": {**quality_metrics, "score": round(quality_score, 2) if quality_score is not None else None},
-        "growth": {**growth_metrics, "score": round(growth_score, 2) if growth_score is not None else None},
-        "valuation": {**valuation_metrics, "score": round(valuation_score, 2) if valuation_score is not None else None},
-        "thesis": thesis,
-    }
+    return symbol, FundamentalCandidate(
+        symbol=symbol,
+        grade=grade,
+        fundamental_score=round(final_score, 2),
+        quality=QualityMetrics(**{**quality_metrics, "score": round(quality_score, 2) if quality_score is not None else None}),
+        growth=GrowthMetrics(**{**growth_metrics, "score": round(growth_score, 2) if growth_score is not None else None}),
+        valuation=ValuationMetrics(**{**valuation_metrics, "score": round(valuation_score, 2) if valuation_score is not None else None}),
+        thesis=thesis,
+    )
 
-def scan_long_term(symbols: List[str]) -> Tuple[List[Dict[str, Any]], List[ErrorDetail]]:
+def scan_long_term(symbols: List[str], exchange: str = "SET") -> Tuple[List[FundamentalCandidate], List[ErrorDetail]]:
     """
     Scans a list of stock symbols for long-term investment opportunities.
     """
@@ -78,7 +79,7 @@ def scan_long_term(symbols: List[str]) -> Tuple[List[Dict[str, Any]], List[Error
     errors = []
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_symbol = {executor.submit(analyze_stock, symbol): symbol for symbol in symbols}
+        future_to_symbol = {executor.submit(analyze_stock, symbol, exchange): symbol for symbol in symbols}
 
         for future in as_completed(future_to_symbol):
             symbol = future_to_symbol[future]
@@ -89,6 +90,6 @@ def scan_long_term(symbols: List[str]) -> Tuple[List[Dict[str, Any]], List[Error
                 errors.append(ErrorDetail(symbol=symbol, error=str(e)))
 
     # Rank candidates by fundamental_score
-    candidates.sort(key=lambda x: x["fundamental_score"], reverse=True)
+    candidates.sort(key=lambda x: x.fundamental_score, reverse=True)
 
     return candidates, errors

@@ -1,15 +1,17 @@
 import yfinance as yf
 from typing import Optional, Dict, Any
 import logging
+from app.utils.symbol_mapper import map_symbol_for_yfinance
 
 logger = logging.getLogger(__name__)
 
-def get_financials(symbol: str) -> Optional[Dict[str, Any]]:
+def get_financials(symbol: str, exchange: str = "SET") -> Optional[Dict[str, Any]]:
     """
     Fetches financial statements for a given stock symbol using yfinance.
 
     Args:
         symbol (str): The stock symbol (e.g., "AAPL").
+        exchange (str): The stock exchange (e.g., "SET", "NASDAQ").
 
     Returns:
         Optional[Dict[str, Any]]: A dictionary containing the income statement,
@@ -17,7 +19,8 @@ def get_financials(symbol: str) -> Optional[Dict[str, Any]]:
                                      or None if the data cannot be fetched.
     """
     try:
-        stock = yf.Ticker(symbol)
+        yf_symbol = map_symbol_for_yfinance(symbol, exchange)
+        stock = yf.Ticker(yf_symbol)
 
         # Fetching quarterly data as it's often more up-to-date
         income_statement = stock.quarterly_income_stmt

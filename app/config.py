@@ -13,5 +13,11 @@ class Settings(BaseSettings):
     APCA_API_SECRET_KEY: str = "YOUR_SECRET_KEY"
     APCA_API_BASE_URL: str = "https://paper-api.alpaca.markets"
 
+    DEFAULT_SYMBOLS: list[str] = [
+        "PTT", "AOT", "DELTA", "CPALL", "BBL", "SCB", "KBANK", "GULF",
+        "ADVANC", "SCC", "BDMS", "PTTEP", "EA", "CPN", "TRUE", "HMPRO",
+        "INTUCH", "MINT", "CRC", "OR"
+    ]
+
 
 settings = Settings()

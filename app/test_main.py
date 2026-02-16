@@ -36,7 +36,7 @@ def test_scan_fundamental_endpoint_no_symbols():
     assert data["count"] == len(data["candidates"])
 
 def test_scan_fundamental_endpoint_with_symbols():
-    response = client.post("/scan/fundamental", json={"symbols": ["AAPL", "GOOG"]})
+    response = client.post("/scan/fundamental", json={"symbols": ["AAPL", "GOOG"], "exchange": "NASDAQ"})
     assert response.status_code == 200
     response_json = response.json()
     assert response_json["status"] in ["success", "error"]
@@ -50,7 +50,7 @@ def test_scan_fundamental_endpoint_with_symbols():
     assert data["count"] <= 2
 
 def test_scan_endpoint():
-    response = client.post("/scan", json={"symbols": ["AAPL", "MSFT"]})
+    response = client.post("/scan", json={"symbols": ["AAPL", "MSFT"], "screener": "america", "exchange": "NASDAQ"})
     assert response.status_code == 200
     response_json = response.json()
     assert "agent_type" in response_json
@@ -63,3 +63,9 @@ def test_scan_endpoint():
     assert "count" in data
     assert "candidates" in data
     assert isinstance(data["candidates"], list)
+
+def test_scan_endpoint_default_params():
+    response = client.post("/scan", json={"symbols": ["PTT"]})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["scan_type"] == "technical"
