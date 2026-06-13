@@ -100,6 +100,7 @@ def health_check():
         "version": "1.0.0",
         "timestamp": _utc_timestamp(),
         "data": {"message": "healthy"},
+        "error": None,
     }
 
 
