@@ -2,10 +2,8 @@ from fastapi import FastAPI, HTTPException
 from typing import Any, Dict, List, Optional
 from app.services.scanner import scan_market
 from app.services.long_term_scanner import scan_long_term
-from app.models import ScanRequest
+from app.models import ScanRequest, ScannerResult, CandidateResult, StandardAgentResponse
 from app.config import settings
-from trading_contracts.scan import ScannerResult, CandidateResult
-from trading_contracts.response import StandardAgentResponse
 import logging
 
 logging.basicConfig(level=logging.INFO)
