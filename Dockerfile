@@ -13,8 +13,10 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 # Copy the app directory into the container at /code
 COPY ./app /code/app
 
-# Expose port 8006 to the outside world
-EXPOSE 8006
+ENV PORT=8003
+
+# Expose the scanner service port used by Manager_Agent docker-compose.yml
+EXPOSE 8003
 
 # Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8003"]

@@ -3,6 +3,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
+    SCANNER_DEV_MODE: bool = False
+
     # Scoring weights
     QUALITY_SCORE_WEIGHT: float = 0.40
     GROWTH_SCORE_WEIGHT: float = 0.35
