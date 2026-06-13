@@ -94,7 +94,7 @@ def health_check():
     return StandardAgentResponse(
         agent_type="scanner",
         status="success",
-        data={"status": "healthy"}
+        data={"message": "healthy"}
     )
 
 
@@ -115,7 +115,7 @@ def scan_stocks(request: ScanRequest):
             screener=request.screener,
             exchange=request.exchange
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Technical scan failed")
         if not settings.SCANNER_DEV_MODE:
             raise
@@ -162,7 +162,7 @@ def scan_fundamental_stocks(request: ScanRequest):
             symbols=symbols_to_scan,
             exchange=request.exchange
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Fundamental scan failed")
         if not settings.SCANNER_DEV_MODE:
             raise
