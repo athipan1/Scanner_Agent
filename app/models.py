@@ -1,8 +1,13 @@
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Generic, TypeVar
 from pydantic import BaseModel, Field
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
+
+
+def utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class ScanRequest(BaseModel):
@@ -39,6 +44,7 @@ class StandardAgentResponse(GenericModel, Generic[T]):
     status: str
     agent_type: str = "scanner"
     version: str = "1.0.0"
+    timestamp: str = Field(default_factory=utc_timestamp)
     data: Optional[T] = None
     error: Optional[Any] = None
     confidence_score: Optional[float] = None
