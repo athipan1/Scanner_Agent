@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
 from typing import Any, Dict, List, Optional
 from app.services.scanner import scan_market
@@ -14,6 +15,10 @@ app = FastAPI(
     description="A market scanner agent for a multi-agent trading system.",
     version="1.0.0"
 )
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _get_value(candidate: Any, key: str, default: Any = None) -> Any:
@@ -93,6 +98,7 @@ def health_check():
         "status": "success",
         "agent_type": "scanner",
         "version": "1.0.0",
+        "timestamp": _utc_timestamp(),
         "data": {"message": "healthy"},
     }
 
