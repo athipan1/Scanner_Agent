@@ -84,16 +84,17 @@ def _error_dict(errors: Any) -> Optional[Dict[str, str]]:
     return result or None
 
 
-@app.get("/health", response_model=StandardAgentResponse)
+@app.get("/health")
 def health_check():
     """
-    Healthcheck endpoint for Docker.
+    Lightweight healthcheck endpoint for Docker.
     """
-    return StandardAgentResponse(
-        agent_type="scanner",
-        status="success",
-        data={"message": "healthy"}
-    )
+    return {
+        "status": "success",
+        "agent_type": "scanner",
+        "version": "1.0.0",
+        "data": {"message": "healthy"},
+    }
 
 
 @app.post("/scan", response_model=StandardAgentResponse)
