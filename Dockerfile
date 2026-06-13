@@ -4,6 +4,10 @@ FROM python:3.9-slim
 # Set the working directory in the container
 WORKDIR /code
 
+# Install curl for Docker healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy the requirements file into the container at /code
 COPY ./requirements.txt /code/requirements.txt
 
@@ -14,6 +18,7 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 COPY ./app /code/app
 
 ENV PORT=8003
+ENV PYTHONPATH=/code
 
 # Expose the scanner service port used by Manager_Agent docker-compose.yml
 EXPOSE 8003
