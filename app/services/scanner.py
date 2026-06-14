@@ -4,6 +4,7 @@ from typing import List, Tuple, Dict, Any, Optional
 
 from app.models import Candidate, ErrorDetail
 from app.universe import resolve_universe
+from app.services.backtest import get_backtest_result, result_to_metadata
 
 
 RECOMMENDATION_SCORE = {
@@ -152,11 +153,7 @@ def _indicator_score(indicators: Dict[str, Any]) -> Dict[str, Any]:
             reasons.append(f"ATR สูง ความผันผวนมาก ({atr_pct:.2%})")
 
     final = sum(score_parts) / len(score_parts) if score_parts else 0.50
-    return {
-        "score": round(_clamp01(final), 4),
-        "values": values,
-        "reasons": reasons,
-    }
+    return {"score": round(_clamp01(final), 4), "values": values, "reasons": reasons}
 
 
 def _relative_strength_score(indicators: Dict[str, Any]) -> Dict[str, Any]:
@@ -255,12 +252,14 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
         reasons.append("Relative Strength ดีกว่าค่าเฉลี่ย")
     if scores["growth_score"] >= 0.60:
         reasons.append("ข้อมูลการเติบโตสนับสนุนการคัดเลือก")
+    if scores["backtest_score"] >= 0.65:
+        reasons.append("Backtest ย้อนหลังสนับสนุนสัญญาณนี้")
     if scores["risk_score"] >= 0.70:
         reasons.append("ความเสี่ยงเชิงเทคนิคยังอยู่ในระดับควบคุมได้")
     reasons.extend(reason_groups)
     if not reasons:
         reasons.append("ผ่านการคัดกรองเบื้องต้น แต่สัญญาณยังไม่แข็งแรงมาก")
-    return reasons[:12]
+    return reasons[:15]
 
 
 def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str, Any]) -> Candidate:
@@ -269,15 +268,18 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
     indicator_result = _indicator_score(indicators)
     relative_result = _relative_strength_score(indicators)
     growth_result = _growth_score(indicators)
+    backtest_result = get_backtest_result(symbol)
+    backtest_metadata = result_to_metadata(backtest_result)
 
     momentum = _momentum_score(analysis, indicator_result["score"], relative_result["score"])
     risk = _risk_score(analysis, indicator_result["values"])
     final_score = _clamp01(
-        (vote_score * 0.25)
-        + (indicator_result["score"] * 0.30)
-        + (momentum * 0.18)
-        + (relative_result["score"] * 0.12)
-        + (growth_result["score"] * 0.10)
+        (vote_score * 0.20)
+        + (indicator_result["score"] * 0.25)
+        + (momentum * 0.15)
+        + (relative_result["score"] * 0.10)
+        + (growth_result["score"] * 0.08)
+        + (backtest_result.score * 0.17)
         + (risk * 0.05)
     )
     recommendation = _rank_recommendation(final_score)
@@ -288,6 +290,7 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
         "momentum_score": round(momentum, 4),
         "relative_strength_score": round(relative_result["score"], 4),
         "growth_score": round(growth_result["score"], 4),
+        "backtest_score": round(backtest_result.score, 4),
         "risk_score": round(risk, 4),
         "final_score": round(final_score, 4),
     }
@@ -297,30 +300,28 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
         **scores,
         "raw_recommendation": raw_recommendation,
         "recommendation": recommendation,
-        "scanner_v3": {
+        "scanner_v4": {
             "indicator_values": indicator_result["values"],
             "relative_strength_values": relative_result["values"],
             "growth_values": growth_result["values"],
+            "backtest": backtest_metadata,
         },
         "reason": _build_reasons(
             symbol,
             raw_recommendation,
             {k: float(v) for k, v in scores.items()},
-            indicator_result["reasons"] + relative_result["reasons"] + growth_result["reasons"],
+            indicator_result["reasons"]
+            + relative_result["reasons"]
+            + growth_result["reasons"]
+            + backtest_result.reason,
         ),
     }
 
-    return Candidate(
-        symbol=symbol,
-        recommendation=recommendation,
-        details=details,
-    )
+    return Candidate(symbol=symbol, recommendation=recommendation, details=details)
 
 
 def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
-    """
-    Fetches technical analysis and indicators for a single stock symbol.
-    """
+    """Fetches technical analysis and indicators for a single stock symbol."""
     try:
         handler = TA_Handler(
             symbol=symbol,
@@ -329,20 +330,15 @@ def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
             interval=Interval.INTERVAL_1_DAY
         )
         analysis_obj = handler.get_analysis()
-        return {
-            "symbol": symbol,
-            "analysis": analysis_obj.summary or {},
-            "indicators": analysis_obj.indicators or {},
-        }
+        return {"symbol": symbol, "analysis": analysis_obj.summary or {}, "indicators": analysis_obj.indicators or {}}
     except Exception as e:
         return {"symbol": symbol, "error": str(e)}
 
 
 def scan_market(symbols: List[str], screener: str = "america", exchange: str = "NASDAQ") -> Tuple[List[Candidate], List[ErrorDetail]]:
     """
-    Scanner V3: scans a stock universe in parallel and ranks candidates using
-    TradingView summary, RSI, MACD, SMA50, SMA200, volume spike, ATR,
-    breakout proximity, relative strength, and growth signals when available.
+    Scanner V4: scans a stock universe and ranks candidates using TradingView indicators,
+    relative strength, growth signals, risk, and lightweight historical backtest.
     """
     symbols_to_scan = resolve_universe(symbols, screener=screener, exchange=exchange)
     candidates = []
@@ -350,7 +346,6 @@ def scan_market(symbols: List[str], screener: str = "america", exchange: str = "
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_symbol = {executor.submit(fetch_analysis, symbol, screener, exchange): symbol for symbol in symbols_to_scan}
-
         for future in as_completed(future_to_symbol):
             symbol = future_to_symbol[future]
             try:
@@ -359,9 +354,7 @@ def scan_market(symbols: List[str], screener: str = "america", exchange: str = "
                     error_message = result.get("error", "Unknown error")
                     errors.append(ErrorDetail(symbol=symbol, error=error_message))
                 else:
-                    analysis = result.get("analysis", {})
-                    indicators = result.get("indicators", {})
-                    candidate = _rank_candidate(symbol, analysis, indicators)
+                    candidate = _rank_candidate(symbol, result.get("analysis", {}), result.get("indicators", {}))
                     final_score = float(candidate.details.get("final_score", 0.0))
                     if candidate.recommendation in ["BUY", "STRONG_BUY"] and final_score >= 0.62:
                         candidates.append(candidate)
