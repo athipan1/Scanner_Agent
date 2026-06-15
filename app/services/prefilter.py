@@ -18,10 +18,11 @@ class PrefilterResult:
     reason: List[str]
 
 
-MIN_PRICE = 5.0
+MIN_PRICE = 3.0
 MIN_AVG_VOLUME = 500_000
-MIN_MARKET_CAP = 1_000_000_000
-MAX_SYMBOLS_AFTER_FILTER = 250
+MIN_MARKET_CAP = 300_000_000
+MAX_SYMBOLS_AFTER_FILTER = 500
+MIN_SYMBOLS_TO_FORCE_SELECT = 250
 
 
 def _clamp01(value: float) -> float:
@@ -37,10 +38,18 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
-@lru_cache(maxsize=2048)
+def _has_bad_symbol_pattern(symbol: str) -> bool:
+    bad_tokens = ["/", "^", "=", ".W", "-W", ".U", "-U", ".R", "-R"]
+    return any(token in symbol for token in bad_tokens)
+
+
+@lru_cache(maxsize=10000)
 def evaluate_symbol(symbol: str) -> PrefilterResult:
     symbol = symbol.upper().strip()
     reasons: List[str] = []
+
+    if _has_bad_symbol_pattern(symbol):
+        return PrefilterResult(symbol, False, 0.0, None, None, None, ["ตัดออกเพราะรูปแบบ symbol คล้าย warrant/unit/right"])
 
     try:
         ticker = yf.Ticker(symbol)
@@ -73,21 +82,22 @@ def evaluate_symbol(symbol: str) -> PrefilterResult:
             reasons.append(f"ตัดออกเพราะประเภทสินทรัพย์ไม่ใช่หุ้นสามัญ ({quote_type})")
             return PrefilterResult(symbol, False, 0.0, price, avg_volume, market_cap, reasons)
 
+        hard_fail_count = 0
         passed = True
         if price is not None and price < MIN_PRICE:
-            passed = False
+            hard_fail_count += 1
             reasons.append(f"ราคาต่ำกว่า ${MIN_PRICE:.0f}")
         elif price is not None:
             reasons.append(f"ราคาผ่านเกณฑ์ (${price:.2f})")
 
         if avg_volume is not None and avg_volume < MIN_AVG_VOLUME:
-            passed = False
+            hard_fail_count += 1
             reasons.append(f"Volume เฉลี่ยต่ำกว่า {MIN_AVG_VOLUME:,}")
         elif avg_volume is not None:
             reasons.append(f"Volume เฉลี่ยผ่านเกณฑ์ ({avg_volume:,.0f})")
 
         if market_cap is not None and market_cap < MIN_MARKET_CAP:
-            passed = False
+            hard_fail_count += 1
             reasons.append(f"Market Cap ต่ำกว่า ${MIN_MARKET_CAP:,.0f}")
         elif market_cap is not None:
             reasons.append(f"Market Cap ผ่านเกณฑ์ (${market_cap:,.0f})")
@@ -95,11 +105,13 @@ def evaluate_symbol(symbol: str) -> PrefilterResult:
         if price is None and avg_volume is None and market_cap is None:
             passed = False
             reasons.append("ไม่มีข้อมูลราคา/Volume/Market Cap เพียงพอสำหรับ Pre-filter")
+        elif hard_fail_count >= 2:
+            passed = False
 
-        price_score = _clamp01((price or 0) / 50.0) if price is not None else 0.50
-        volume_score = _clamp01((avg_volume or 0) / 5_000_000.0) if avg_volume is not None else 0.50
-        cap_score = _clamp01((market_cap or 0) / 50_000_000_000.0) if market_cap is not None else 0.50
-        score = _clamp01((price_score * 0.20) + (volume_score * 0.45) + (cap_score * 0.35))
+        price_score = _clamp01((price or 0) / 50.0) if price is not None else 0.45
+        volume_score = _clamp01((avg_volume or 0) / 5_000_000.0) if avg_volume is not None else 0.45
+        cap_score = _clamp01((market_cap or 0) / 10_000_000_000.0) if market_cap is not None else 0.45
+        score = _clamp01((price_score * 0.15) + (volume_score * 0.55) + (cap_score * 0.30))
 
         return PrefilterResult(
             symbol=symbol,
@@ -126,9 +138,13 @@ def prefilter_symbols(symbols: Iterable[str]) -> Tuple[List[str], Dict[str, Dict
     results = [evaluate_symbol(symbol) for symbol in symbols]
     passed_results = [result for result in results if result.passed]
 
-    # Keep the most liquid/large names first to avoid downstream rate limits.
     passed_results.sort(key=lambda item: item.score, reverse=True)
-    selected = passed_results[:MAX_SYMBOLS_AFTER_FILTER]
+
+    if len(passed_results) < MIN_SYMBOLS_TO_FORCE_SELECT:
+        fallback_results = sorted(results, key=lambda item: item.score, reverse=True)
+        selected = fallback_results[:MAX_SYMBOLS_AFTER_FILTER]
+    else:
+        selected = passed_results[:MAX_SYMBOLS_AFTER_FILTER]
 
     metadata = {
         result.symbol: {
