@@ -6,6 +6,7 @@ from app.models import Candidate, ErrorDetail
 from app.universe import resolve_universe
 from app.services.backtest import get_backtest_result, result_to_metadata
 from app.services.prefilter import prefilter_symbols
+from app.services.market_ranker import rank_market_symbols
 from app.services.fundamental_score import get_fundamental_score, result_to_metadata as fundamental_to_metadata
 from app.services.sector_rotation import get_sector_rotation_score, result_to_metadata as sector_to_metadata
 
@@ -252,6 +253,8 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
         reasons.append(f"{symbol} มีสัญญาณเทคนิคจาก TradingView เป็น {raw_recommendation}")
     if scores["prefilter_score"] >= 0.65:
         reasons.append("ผ่าน Pre-filter ด้านสภาพคล่องและขนาดกิจการ")
+    if scores["market_rank_score"] >= 0.65:
+        reasons.append("Market Ranking สนับสนุนให้ส่งเข้า TradingView")
     if scores["sector_rotation_score"] >= 0.65:
         reasons.append("Sector Rotation สนับสนุนหุ้นตัวนี้")
     if scores["fundamental_score"] >= 0.65:
@@ -269,11 +272,18 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
     reasons.extend(reason_groups)
     if not reasons:
         reasons.append("ผ่านการคัดกรองเบื้องต้น แต่สัญญาณยังไม่แข็งแรงมาก")
-    return reasons[:26]
+    return reasons[:28]
 
 
-def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str, Any], prefilter_data: Optional[Dict[str, Any]] = None) -> Candidate:
+def _rank_candidate(
+    symbol: str,
+    analysis: Dict[str, Any],
+    indicators: Dict[str, Any],
+    prefilter_data: Optional[Dict[str, Any]] = None,
+    market_rank_data: Optional[Dict[str, Any]] = None,
+) -> Candidate:
     prefilter_data = prefilter_data or {}
+    market_rank_data = market_rank_data or {}
     raw_recommendation = str(analysis.get("RECOMMENDATION", "HOLD")).upper()
     vote_score = _technical_score(analysis)
     indicator_result = _indicator_score(indicators)
@@ -286,25 +296,28 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
     sector_result = get_sector_rotation_score(symbol)
     sector_metadata = sector_to_metadata(sector_result)
     prefilter_score = float(prefilter_data.get("prefilter_score", 0.50) or 0.50)
+    market_rank_score = float(market_rank_data.get("market_rank_score", 0.50) or 0.50)
 
     momentum = _momentum_score(analysis, indicator_result["score"], relative_result["score"], sector_result.score)
     risk = _risk_score(analysis, indicator_result["values"])
     final_score = _clamp01(
-        (prefilter_score * 0.05)
-        + (vote_score * 0.14)
-        + (indicator_result["score"] * 0.18)
-        + (momentum * 0.11)
-        + (relative_result["score"] * 0.07)
-        + (sector_result.score * 0.10)
+        (prefilter_score * 0.04)
+        + (market_rank_score * 0.08)
+        + (vote_score * 0.13)
+        + (indicator_result["score"] * 0.17)
+        + (momentum * 0.10)
+        + (relative_result["score"] * 0.06)
+        + (sector_result.score * 0.09)
         + (growth_result["score"] * 0.05)
         + (backtest_result.score * 0.12)
-        + (fundamental_result.score * 0.13)
+        + (fundamental_result.score * 0.11)
         + (risk * 0.05)
     )
     recommendation = _rank_recommendation(final_score)
 
     scores = {
         "prefilter_score": round(prefilter_score, 4),
+        "market_rank_score": round(market_rank_score, 4),
         "technical_vote_score": round(vote_score, 4),
         "indicator_score": round(indicator_result["score"], 4),
         "momentum_score": round(momentum, 4),
@@ -322,8 +335,9 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
         **scores,
         "raw_recommendation": raw_recommendation,
         "recommendation": recommendation,
-        "scanner_v48": {
+        "scanner_v49": {
             "prefilter": prefilter_data,
+            "market_rank": market_rank_data,
             "indicator_values": indicator_result["values"],
             "relative_strength_values": relative_result["values"],
             "sector_rotation": sector_metadata,
@@ -336,6 +350,7 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
             raw_recommendation,
             {k: float(v) for k, v in scores.items()},
             list(prefilter_data.get("reason", []))
+            + list(market_rank_data.get("reason", []))
             + sector_result.reason
             + indicator_result["reasons"]
             + relative_result["reasons"]
@@ -376,18 +391,20 @@ def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
 
 def scan_market(symbols: List[str], screener: str = "america", exchange: str = "NASDAQ") -> Tuple[List[Candidate], List[ErrorDetail]]:
     """
-    Scanner V4.8: loads a broad universe, pre-filters by liquidity/market cap/price,
-    then ranks candidates using TradingView indicators, relative strength, sector rotation,
-    growth, backtest, Yahoo Finance fundamentals, and risk.
+    Scanner V4.9: loads a broad universe, pre-filters by liquidity/market cap/price,
+    ranks by Yahoo Finance momentum/volume/trend, then sends only the strongest names
+    into TradingView before final scoring with fundamentals, sector rotation, backtest, and risk.
     """
     raw_symbols = resolve_universe(symbols, screener=screener, exchange=exchange)
     symbols_to_scan = raw_symbols
     prefilter_metadata: Dict[str, Dict[str, Any]] = {}
+    market_rank_metadata: Dict[str, Dict[str, Any]] = {}
     explicit_symbols_provided = bool(symbols)
     is_us_market = screener.lower() == "america" and exchange.upper() != "SET"
     if is_us_market and not explicit_symbols_provided:
         filtered_symbols, prefilter_metadata = prefilter_symbols(raw_symbols)
-        symbols_to_scan = filtered_symbols or raw_symbols[:250]
+        ranked_symbols, market_rank_metadata = rank_market_symbols(filtered_symbols or raw_symbols[:500])
+        symbols_to_scan = ranked_symbols or filtered_symbols or raw_symbols[:75]
 
     candidates = []
     errors = []
@@ -401,7 +418,13 @@ def scan_market(symbols: List[str], screener: str = "america", exchange: str = "
                     error_message = result.get("error", "Unknown error")
                     errors.append(ErrorDetail(symbol=symbol, error=error_message))
                 else:
-                    candidate = _rank_candidate(symbol, result.get("analysis", {}), result.get("indicators", {}), prefilter_metadata.get(symbol, {}))
+                    candidate = _rank_candidate(
+                        symbol,
+                        result.get("analysis", {}),
+                        result.get("indicators", {}),
+                        prefilter_metadata.get(symbol, {}),
+                        market_rank_metadata.get(symbol, {}),
+                    )
                     candidate.details["resolved_exchange"] = result.get("exchange", exchange)
                     final_score = float(candidate.details.get("final_score", 0.0))
                     if candidate.recommendation in ["BUY", "STRONG_BUY"] and final_score >= DISCOVERY_THRESHOLD:
