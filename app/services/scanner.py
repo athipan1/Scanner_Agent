@@ -348,13 +348,30 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
 
 
 def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
-    """Fetches technical analysis and indicators for a single stock symbol."""
-    try:
-        handler = TA_Handler(symbol=symbol, screener=screener, exchange=exchange, interval=Interval.INTERVAL_1_DAY)
-        analysis_obj = handler.get_analysis()
-        return {"symbol": symbol, "analysis": analysis_obj.summary or {}, "indicators": analysis_obj.indicators or {}}
-    except Exception as e:
-        return {"symbol": symbol, "error": str(e)}
+    """Fetches technical analysis and indicators for a single stock symbol, trying common US exchanges when needed."""
+    last_error = None
+    for exchange_candidate in _exchange_candidates(exchange):
+        try:
+            handler = TA_Handler(
+                symbol=symbol,
+                screener=screener,
+                exchange=exchange_candidate,
+                interval=Interval.INTERVAL_1_DAY,
+            )
+            analysis_obj = handler.get_analysis()
+            summary = analysis_obj.summary or {}
+            indicators = analysis_obj.indicators or {}
+            if summary or indicators:
+                return {
+                    "symbol": symbol,
+                    "exchange": exchange_candidate,
+                    "analysis": summary,
+                    "indicators": indicators,
+                }
+        except Exception as e:
+            last_error = str(e)
+            continue
+    return {"symbol": symbol, "error": last_error or "No TradingView analysis found on supported exchanges"}
 
 
 def scan_market(symbols: List[str], screener: str = "america", exchange: str = "NASDAQ") -> Tuple[List[Candidate], List[ErrorDetail]]:
@@ -385,8 +402,9 @@ def scan_market(symbols: List[str], screener: str = "america", exchange: str = "
                     errors.append(ErrorDetail(symbol=symbol, error=error_message))
                 else:
                     candidate = _rank_candidate(symbol, result.get("analysis", {}), result.get("indicators", {}), prefilter_metadata.get(symbol, {}))
+                    candidate.details["resolved_exchange"] = result.get("exchange", exchange)
                     final_score = float(candidate.details.get("final_score", 0.0))
-                    if candidate.recommendation in ["BUY", "STRONG_BUY"] and final_score >= 0.62:
+                    if candidate.recommendation in ["BUY", "STRONG_BUY"] and final_score >= DISCOVERY_THRESHOLD:
                         candidates.append(candidate)
             except Exception as e:
                 errors.append(ErrorDetail(symbol=symbol, error=str(e)))
