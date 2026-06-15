@@ -7,6 +7,7 @@ from app.universe import resolve_universe
 from app.services.backtest import get_backtest_result, result_to_metadata
 from app.services.prefilter import prefilter_symbols
 from app.services.fundamental_score import get_fundamental_score, result_to_metadata as fundamental_to_metadata
+from app.services.sector_rotation import get_sector_rotation_score, result_to_metadata as sector_to_metadata
 
 
 RECOMMENDATION_SCORE = {
@@ -65,7 +66,18 @@ def _indicator_score(indicators: Dict[str, Any]) -> Dict[str, Any]:
     high_52w = _get_indicator(indicators, "High.52W", "52 Week High", "high_52w")
     score_parts = []
     reasons = []
-    values = {"close": close, "rsi": rsi, "macd": macd, "macd_signal": macd_signal, "sma50": sma50, "sma200": sma200, "volume": volume, "volume_ma": volume_ma, "atr": atr, "high_52w": high_52w}
+    values = {
+        "close": close,
+        "rsi": rsi,
+        "macd": macd,
+        "macd_signal": macd_signal,
+        "sma50": sma50,
+        "sma200": sma200,
+        "volume": volume,
+        "volume_ma": volume_ma,
+        "atr": atr,
+        "high_52w": high_52w,
+    }
 
     if rsi is not None:
         if 45 <= rsi <= 70:
@@ -183,7 +195,7 @@ def _growth_score(indicators: Dict[str, Any]) -> Dict[str, Any]:
     return {"score": round(score, 4), "values": values, "reasons": reasons}
 
 
-def _momentum_score(summary: Dict[str, Any], indicator_score: float, relative_strength: float) -> float:
+def _momentum_score(summary: Dict[str, Any], indicator_score: float, relative_strength: float, sector_score: float) -> float:
     recommendation = str(summary.get("RECOMMENDATION", "HOLD")).upper()
     if recommendation == "STRONG_BUY":
         base = 0.90
@@ -195,7 +207,7 @@ def _momentum_score(summary: Dict[str, Any], indicator_score: float, relative_st
         base = 0.25
     else:
         base = 0.10
-    return _clamp01((base * 0.45) + (indicator_score * 0.35) + (relative_strength * 0.20))
+    return _clamp01((base * 0.38) + (indicator_score * 0.32) + (relative_strength * 0.18) + (sector_score * 0.12))
 
 
 def _risk_score(summary: Dict[str, Any], indicator_values: Dict[str, Any]) -> float:
@@ -230,6 +242,8 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
         reasons.append(f"{symbol} มีสัญญาณเทคนิคจาก TradingView เป็น {raw_recommendation}")
     if scores["prefilter_score"] >= 0.65:
         reasons.append("ผ่าน Pre-filter ด้านสภาพคล่องและขนาดกิจการ")
+    if scores["sector_rotation_score"] >= 0.65:
+        reasons.append("Sector Rotation สนับสนุนหุ้นตัวนี้")
     if scores["fundamental_score"] >= 0.65:
         reasons.append("คะแนนพื้นฐานจาก Yahoo Finance สนับสนุนการคัดเลือก")
     if scores["indicator_score"] >= 0.70:
@@ -245,7 +259,7 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
     reasons.extend(reason_groups)
     if not reasons:
         reasons.append("ผ่านการคัดกรองเบื้องต้น แต่สัญญาณยังไม่แข็งแรงมาก")
-    return reasons[:22]
+    return reasons[:26]
 
 
 def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str, Any], prefilter_data: Optional[Dict[str, Any]] = None) -> Candidate:
@@ -259,19 +273,27 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
     backtest_metadata = result_to_metadata(backtest_result)
     fundamental_result = get_fundamental_score(symbol)
     fundamental_metadata = fundamental_to_metadata(fundamental_result)
+    sector_result = get_sector_rotation_score(symbol)
+    sector_metadata = sector_to_metadata(sector_result)
     prefilter_score = float(prefilter_data.get("prefilter_score", 0.50) or 0.50)
 
-    momentum = _momentum_score(analysis, indicator_result["score"], relative_result["score"])
+    momentum = _momentum_score(
+        analysis,
+        indicator_result["score"],
+        relative_result["score"],
+        sector_result.score,
+    )
     risk = _risk_score(analysis, indicator_result["values"])
     final_score = _clamp01(
-        (prefilter_score * 0.06)
-        + (vote_score * 0.15)
-        + (indicator_result["score"] * 0.20)
-        + (momentum * 0.12)
-        + (relative_result["score"] * 0.08)
-        + (growth_result["score"] * 0.06)
-        + (backtest_result.score * 0.13)
-        + (fundamental_result.score * 0.15)
+        (prefilter_score * 0.05)
+        + (vote_score * 0.14)
+        + (indicator_result["score"] * 0.18)
+        + (momentum * 0.11)
+        + (relative_result["score"] * 0.07)
+        + (sector_result.score * 0.10)
+        + (growth_result["score"] * 0.05)
+        + (backtest_result.score * 0.12)
+        + (fundamental_result.score * 0.13)
         + (risk * 0.05)
     )
     recommendation = _rank_recommendation(final_score)
@@ -282,6 +304,7 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
         "indicator_score": round(indicator_result["score"], 4),
         "momentum_score": round(momentum, 4),
         "relative_strength_score": round(relative_result["score"], 4),
+        "sector_rotation_score": round(sector_result.score, 4),
         "growth_score": round(growth_result["score"], 4),
         "backtest_score": round(backtest_result.score, 4),
         "fundamental_score": round(fundamental_result.score, 4),
@@ -294,10 +317,11 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
         **scores,
         "raw_recommendation": raw_recommendation,
         "recommendation": recommendation,
-        "scanner_v47": {
+        "scanner_v48": {
             "prefilter": prefilter_data,
             "indicator_values": indicator_result["values"],
             "relative_strength_values": relative_result["values"],
+            "sector_rotation": sector_metadata,
             "growth_values": growth_result["values"],
             "backtest": backtest_metadata,
             "fundamental": fundamental_metadata,
@@ -307,6 +331,7 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
             raw_recommendation,
             {k: float(v) for k, v in scores.items()},
             list(prefilter_data.get("reason", []))
+            + sector_result.reason
             + indicator_result["reasons"]
             + relative_result["reasons"]
             + growth_result["reasons"]
@@ -329,9 +354,9 @@ def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
 
 def scan_market(symbols: List[str], screener: str = "america", exchange: str = "NASDAQ") -> Tuple[List[Candidate], List[ErrorDetail]]:
     """
-    Scanner V4.7: loads a broad universe, pre-filters by liquidity/market cap/price,
-    then ranks candidates using TradingView indicators, relative strength, growth,
-    backtest, Yahoo Finance fundamentals, and risk.
+    Scanner V4.8: loads a broad universe, pre-filters by liquidity/market cap/price,
+    then ranks candidates using TradingView indicators, relative strength, sector rotation,
+    growth, backtest, Yahoo Finance fundamentals, and risk.
     """
     raw_symbols = resolve_universe(symbols, screener=screener, exchange=exchange)
     symbols_to_scan = raw_symbols
