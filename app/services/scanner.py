@@ -6,6 +6,7 @@ from app.models import Candidate, ErrorDetail
 from app.universe import resolve_universe
 from app.services.backtest import get_backtest_result, result_to_metadata
 from app.services.prefilter import prefilter_symbols
+from app.services.fundamental_score import get_fundamental_score, result_to_metadata as fundamental_to_metadata
 
 
 RECOMMENDATION_SCORE = {
@@ -64,18 +65,7 @@ def _indicator_score(indicators: Dict[str, Any]) -> Dict[str, Any]:
     high_52w = _get_indicator(indicators, "High.52W", "52 Week High", "high_52w")
     score_parts = []
     reasons = []
-    values = {
-        "close": close,
-        "rsi": rsi,
-        "macd": macd,
-        "macd_signal": macd_signal,
-        "sma50": sma50,
-        "sma200": sma200,
-        "volume": volume,
-        "volume_ma": volume_ma,
-        "atr": atr,
-        "high_52w": high_52w,
-    }
+    values = {"close": close, "rsi": rsi, "macd": macd, "macd_signal": macd_signal, "sma50": sma50, "sma200": sma200, "volume": volume, "volume_ma": volume_ma, "atr": atr, "high_52w": high_52w}
 
     if rsi is not None:
         if 45 <= rsi <= 70:
@@ -240,6 +230,8 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
         reasons.append(f"{symbol} มีสัญญาณเทคนิคจาก TradingView เป็น {raw_recommendation}")
     if scores["prefilter_score"] >= 0.65:
         reasons.append("ผ่าน Pre-filter ด้านสภาพคล่องและขนาดกิจการ")
+    if scores["fundamental_score"] >= 0.65:
+        reasons.append("คะแนนพื้นฐานจาก Yahoo Finance สนับสนุนการคัดเลือก")
     if scores["indicator_score"] >= 0.70:
         reasons.append("อินดิเคเตอร์หลักโดยรวมเป็นบวก")
     if scores["relative_strength_score"] >= 0.60:
@@ -253,7 +245,7 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
     reasons.extend(reason_groups)
     if not reasons:
         reasons.append("ผ่านการคัดกรองเบื้องต้น แต่สัญญาณยังไม่แข็งแรงมาก")
-    return reasons[:18]
+    return reasons[:22]
 
 
 def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str, Any], prefilter_data: Optional[Dict[str, Any]] = None) -> Candidate:
@@ -265,18 +257,21 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
     growth_result = _growth_score(indicators)
     backtest_result = get_backtest_result(symbol)
     backtest_metadata = result_to_metadata(backtest_result)
+    fundamental_result = get_fundamental_score(symbol)
+    fundamental_metadata = fundamental_to_metadata(fundamental_result)
     prefilter_score = float(prefilter_data.get("prefilter_score", 0.50) or 0.50)
 
     momentum = _momentum_score(analysis, indicator_result["score"], relative_result["score"])
     risk = _risk_score(analysis, indicator_result["values"])
     final_score = _clamp01(
-        (prefilter_score * 0.07)
-        + (vote_score * 0.18)
-        + (indicator_result["score"] * 0.23)
-        + (momentum * 0.14)
-        + (relative_result["score"] * 0.10)
-        + (growth_result["score"] * 0.08)
-        + (backtest_result.score * 0.15)
+        (prefilter_score * 0.06)
+        + (vote_score * 0.15)
+        + (indicator_result["score"] * 0.20)
+        + (momentum * 0.12)
+        + (relative_result["score"] * 0.08)
+        + (growth_result["score"] * 0.06)
+        + (backtest_result.score * 0.13)
+        + (fundamental_result.score * 0.15)
         + (risk * 0.05)
     )
     recommendation = _rank_recommendation(final_score)
@@ -289,6 +284,7 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
         "relative_strength_score": round(relative_result["score"], 4),
         "growth_score": round(growth_result["score"], 4),
         "backtest_score": round(backtest_result.score, 4),
+        "fundamental_score": round(fundamental_result.score, 4),
         "risk_score": round(risk, 4),
         "final_score": round(final_score, 4),
     }
@@ -298,12 +294,13 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
         **scores,
         "raw_recommendation": raw_recommendation,
         "recommendation": recommendation,
-        "scanner_v46": {
+        "scanner_v47": {
             "prefilter": prefilter_data,
             "indicator_values": indicator_result["values"],
             "relative_strength_values": relative_result["values"],
             "growth_values": growth_result["values"],
             "backtest": backtest_metadata,
+            "fundamental": fundamental_metadata,
         },
         "reason": _build_reasons(
             symbol,
@@ -313,7 +310,8 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
             + indicator_result["reasons"]
             + relative_result["reasons"]
             + growth_result["reasons"]
-            + backtest_result.reason,
+            + backtest_result.reason
+            + fundamental_result.reason,
         ),
     }
     return Candidate(symbol=symbol, recommendation=recommendation, details=details)
@@ -322,12 +320,7 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
 def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
     """Fetches technical analysis and indicators for a single stock symbol."""
     try:
-        handler = TA_Handler(
-            symbol=symbol,
-            screener=screener,
-            exchange=exchange,
-            interval=Interval.INTERVAL_1_DAY,
-        )
+        handler = TA_Handler(symbol=symbol, screener=screener, exchange=exchange, interval=Interval.INTERVAL_1_DAY)
         analysis_obj = handler.get_analysis()
         return {"symbol": symbol, "analysis": analysis_obj.summary or {}, "indicators": analysis_obj.indicators or {}}
     except Exception as e:
@@ -336,15 +329,13 @@ def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
 
 def scan_market(symbols: List[str], screener: str = "america", exchange: str = "NASDAQ") -> Tuple[List[Candidate], List[ErrorDetail]]:
     """
-    Scanner V4.6: loads a broad universe, pre-filters by liquidity/market cap/price,
+    Scanner V4.7: loads a broad universe, pre-filters by liquidity/market cap/price,
     then ranks candidates using TradingView indicators, relative strength, growth,
-    risk, and lightweight historical backtest.
+    backtest, Yahoo Finance fundamentals, and risk.
     """
     raw_symbols = resolve_universe(symbols, screener=screener, exchange=exchange)
     symbols_to_scan = raw_symbols
     prefilter_metadata: Dict[str, Dict[str, Any]] = {}
-
-    # Only run the expensive market pre-filter for auto-loaded US universes.
     explicit_symbols_provided = bool(symbols)
     is_us_market = screener.lower() == "america" and exchange.upper() != "SET"
     if is_us_market and not explicit_symbols_provided:
@@ -353,7 +344,6 @@ def scan_market(symbols: List[str], screener: str = "america", exchange: str = "
 
     candidates = []
     errors = []
-
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_symbol = {executor.submit(fetch_analysis, symbol, screener, exchange): symbol for symbol in symbols_to_scan}
         for future in as_completed(future_to_symbol):
@@ -364,17 +354,11 @@ def scan_market(symbols: List[str], screener: str = "america", exchange: str = "
                     error_message = result.get("error", "Unknown error")
                     errors.append(ErrorDetail(symbol=symbol, error=error_message))
                 else:
-                    candidate = _rank_candidate(
-                        symbol,
-                        result.get("analysis", {}),
-                        result.get("indicators", {}),
-                        prefilter_metadata.get(symbol, {}),
-                    )
+                    candidate = _rank_candidate(symbol, result.get("analysis", {}), result.get("indicators", {}), prefilter_metadata.get(symbol, {}))
                     final_score = float(candidate.details.get("final_score", 0.0))
                     if candidate.recommendation in ["BUY", "STRONG_BUY"] and final_score >= 0.62:
                         candidates.append(candidate)
             except Exception as e:
                 errors.append(ErrorDetail(symbol=symbol, error=str(e)))
-
     candidates.sort(key=lambda c: c.details.get("final_score", 0.0), reverse=True)
     return candidates[:10], errors
