@@ -10,6 +10,9 @@ from app.services.fundamental_score import get_fundamental_score, result_to_meta
 from app.services.sector_rotation import get_sector_rotation_score, result_to_metadata as sector_to_metadata
 
 
+DISCOVERY_THRESHOLD = 0.55
+EXCHANGE_FALLBACKS = ["NASDAQ", "NYSE", "AMEX"]
+
 RECOMMENDATION_SCORE = {
     "STRONG_BUY": 1.0,
     "BUY": 0.78,
@@ -18,6 +21,13 @@ RECOMMENDATION_SCORE = {
     "SELL": 0.25,
     "STRONG_SELL": 0.05,
 }
+
+
+def _exchange_candidates(requested_exchange: str) -> List[str]:
+    requested = (requested_exchange or "NASDAQ").upper()
+    if requested == "SET":
+        return ["SET"]
+    return [requested] + [exchange for exchange in EXCHANGE_FALLBACKS if exchange != requested]
 
 
 def _clamp01(value: float) -> float:
@@ -227,7 +237,7 @@ def _risk_score(summary: Dict[str, Any], indicator_values: Dict[str, Any]) -> fl
 def _rank_recommendation(score: float) -> str:
     if score >= 0.82:
         return "STRONG_BUY"
-    if score >= 0.62:
+    if score >= DISCOVERY_THRESHOLD:
         return "BUY"
     if score >= 0.45:
         return "HOLD"
@@ -277,12 +287,7 @@ def _rank_candidate(symbol: str, analysis: Dict[str, Any], indicators: Dict[str,
     sector_metadata = sector_to_metadata(sector_result)
     prefilter_score = float(prefilter_data.get("prefilter_score", 0.50) or 0.50)
 
-    momentum = _momentum_score(
-        analysis,
-        indicator_result["score"],
-        relative_result["score"],
-        sector_result.score,
-    )
+    momentum = _momentum_score(analysis, indicator_result["score"], relative_result["score"], sector_result.score)
     risk = _risk_score(analysis, indicator_result["values"])
     final_score = _clamp01(
         (prefilter_score * 0.05)
