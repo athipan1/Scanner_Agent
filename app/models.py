@@ -34,6 +34,33 @@ class CandidateResult(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+class ScannerCandidateContract(BaseModel):
+    """
+    Clean candidate payload for the multi-agent system.
+    Scanner_Agent should discover candidates, not make final portfolio decisions.
+    Manager_Agent can use these fields to call Fundamental_Agent, Technical_Agent,
+    Learning_Agent, Database_Agent, and Execution_Agent.
+    """
+
+    symbol: str
+    source_agent: str = "Scanner_Agent"
+    candidate_score: Optional[float] = None
+    discovery_rank: Optional[int] = None
+    recommendation_hint: str = "WATCHLIST"
+    exchange: Optional[str] = None
+    screener: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    reasons: List[str] = Field(default_factory=list)
+    raw_scores: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ScannerContractResult(BaseModel):
+    scan_type: str = "candidate_discovery"
+    count: int
+    candidates: List[ScannerCandidateContract] = Field(default_factory=list)
+
+
 class ScannerResult(BaseModel):
     scan_type: str
     count: int
