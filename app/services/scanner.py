@@ -7,6 +7,7 @@ from app.universe import resolve_universe
 from app.services.backtest import get_backtest_result, result_to_metadata
 from app.services.prefilter import prefilter_symbols
 from app.services.market_ranker import rank_market_symbols
+from app.services.feedback_loop import append_feedback_seeds
 from app.services.fundamental_score import get_fundamental_score, result_to_metadata as fundamental_to_metadata
 from app.services.sector_rotation import get_sector_rotation_score, result_to_metadata as sector_to_metadata
 
@@ -391,9 +392,8 @@ def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
 
 def scan_market(symbols: List[str], screener: str = "america", exchange: str = "NASDAQ") -> Tuple[List[Candidate], List[ErrorDetail]]:
     """
-    Scanner V4.9: loads a broad universe, pre-filters by liquidity/market cap/price,
-    ranks by Yahoo Finance momentum/volume/trend, then sends only the strongest names
-    into TradingView before final scoring with fundamentals, sector rotation, backtest, and risk.
+    Scanner V5.0: loads a broad universe, ranks by market momentum, sends only the strongest names
+    into TradingView, then records selected candidates for feedback learning.
     """
     raw_symbols = resolve_universe(symbols, screener=screener, exchange=exchange)
     symbols_to_scan = raw_symbols
@@ -432,4 +432,9 @@ def scan_market(symbols: List[str], screener: str = "america", exchange: str = "
             except Exception as e:
                 errors.append(ErrorDetail(symbol=symbol, error=str(e)))
     candidates.sort(key=lambda c: c.details.get("final_score", 0.0), reverse=True)
-    return candidates[:10], errors
+    top_candidates = candidates[:10]
+    try:
+        append_feedback_seeds(top_candidates)
+    except Exception as e:
+        errors.append(ErrorDetail(symbol="FEEDBACK_LOOP", error=str(e)))
+    return top_candidates, errors
