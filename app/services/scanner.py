@@ -8,6 +8,7 @@ from app.services.backtest import get_backtest_result, result_to_metadata
 from app.services.prefilter import prefilter_symbols
 from app.services.market_ranker import rank_market_symbols
 from app.services.feedback_loop import append_feedback_seeds
+from app.services.weight_tuner import load_score_weights
 from app.services.fundamental_score import get_fundamental_score, result_to_metadata as fundamental_to_metadata
 from app.services.sector_rotation import get_sector_rotation_score, result_to_metadata as sector_to_metadata
 
@@ -276,6 +277,11 @@ def _build_reasons(symbol: str, raw_recommendation: str, scores: Dict[str, float
     return reasons[:28]
 
 
+def _weighted_final_score(score_values: Dict[str, float]) -> float:
+    weights = load_score_weights()
+    return _clamp01(sum(float(score_values.get(key, 0.0)) * float(weight) for key, weight in weights.items()))
+
+
 def _rank_candidate(
     symbol: str,
     analysis: Dict[str, Any],
@@ -301,19 +307,20 @@ def _rank_candidate(
 
     momentum = _momentum_score(analysis, indicator_result["score"], relative_result["score"], sector_result.score)
     risk = _risk_score(analysis, indicator_result["values"])
-    final_score = _clamp01(
-        (prefilter_score * 0.04)
-        + (market_rank_score * 0.08)
-        + (vote_score * 0.13)
-        + (indicator_result["score"] * 0.17)
-        + (momentum * 0.10)
-        + (relative_result["score"] * 0.06)
-        + (sector_result.score * 0.09)
-        + (growth_result["score"] * 0.05)
-        + (backtest_result.score * 0.12)
-        + (fundamental_result.score * 0.11)
-        + (risk * 0.05)
-    )
+    score_values = {
+        "prefilter_score": prefilter_score,
+        "market_rank_score": market_rank_score,
+        "technical_vote_score": vote_score,
+        "indicator_score": indicator_result["score"],
+        "momentum_score": momentum,
+        "relative_strength_score": relative_result["score"],
+        "sector_rotation_score": sector_result.score,
+        "growth_score": growth_result["score"],
+        "backtest_score": backtest_result.score,
+        "fundamental_score": fundamental_result.score,
+        "risk_score": risk,
+    }
+    final_score = _weighted_final_score(score_values)
     recommendation = _rank_recommendation(final_score)
 
     scores = {
@@ -334,9 +341,10 @@ def _rank_candidate(
     details = {
         **analysis,
         **scores,
+        "score_weights": load_score_weights(),
         "raw_recommendation": raw_recommendation,
         "recommendation": recommendation,
-        "scanner_v49": {
+        "scanner_v50": {
             "prefilter": prefilter_data,
             "market_rank": market_rank_data,
             "indicator_values": indicator_result["values"],
@@ -392,8 +400,9 @@ def fetch_analysis(symbol: str, screener: str, exchange: str) -> Dict[str, Any]:
 
 def scan_market(symbols: List[str], screener: str = "america", exchange: str = "NASDAQ") -> Tuple[List[Candidate], List[ErrorDetail]]:
     """
-    Scanner V5.0: loads a broad universe, ranks by market momentum, sends only the strongest names
-    into TradingView, then records selected candidates for feedback learning.
+    Scanner V5.0: loads a broad universe, applies learned score weights,
+    ranks by market momentum, sends only the strongest names into TradingView,
+    then records selected candidates for feedback learning.
     """
     raw_symbols = resolve_universe(symbols, screener=screener, exchange=exchange)
     symbols_to_scan = raw_symbols
