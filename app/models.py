@@ -16,6 +16,14 @@ class ScanRequest(BaseModel):
     exchange: str = Field(default="SET", description="The stock exchange to use (e.g., 'SET', 'NASDAQ', 'NYSE').")
 
 
+class BestFundamentalsRequest(BaseModel):
+    universe: str = Field(default="NASDAQ_SP500", description="Universe to discover from. Currently supports NASDAQ_SP500.")
+    max_universe: int = Field(default=1000, ge=1, le=6000, description="Maximum symbols to analyze from the broad market universe.")
+    top_n: int = Field(default=10, ge=1, le=50, description="Number of fundamentally strong candidates to return.")
+    exchange: str = Field(default="NASDAQ", description="Primary US exchange to use for market data lookup.")
+    max_workers: int = Field(default=10, ge=1, le=20, description="Concurrent workers for analysis.")
+
+
 class Candidate(BaseModel):
     symbol: str
     recommendation: str
@@ -59,6 +67,8 @@ class ScannerContractResult(BaseModel):
     scan_type: str = "candidate_discovery"
     count: int
     candidates: List[ScannerCandidateContract] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    errors: Dict[str, str] = Field(default_factory=dict)
 
 
 class ScannerResult(BaseModel):
