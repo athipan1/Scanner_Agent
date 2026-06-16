@@ -1,0 +1,189 @@
+name: Scanner Market Smoke Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Run every day at 08:30 Thailand time (01:30 UTC)
+    - cron: "30 1 * * *"
+
+jobs:
+  scanner-market-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Scanner_Agent
+        uses: actions/checkout@v4
+
+      - name: Build Scanner_Agent image
+        run: |
+          docker build -t scanner-agent-smoke-test:latest .
+
+      - name: Start Scanner_Agent
+        run: |
+          docker run -d \
+            --name scanner-agent \
+            -p 8003:8003 \
+            -e SCANNER_DEV_MODE=false \
+            scanner-agent-smoke-test:latest
+
+      - name: Wait for Scanner_Agent health
+        run: |
+          for i in {1..40}; do
+            if curl -fsS http://localhost:8003/health >/dev/null; then
+              echo "Scanner_Agent is healthy."
+              exit 0
+            fi
+            echo "Waiting for Scanner_Agent... attempt $i"
+            docker logs --tail=80 scanner-agent || true
+            sleep 5
+          done
+
+          echo "Scanner_Agent did not become healthy in time."
+          docker logs scanner-agent || true
+          exit 1
+
+      - name: Test market scanning output
+        run: |
+          mkdir -p reports
+
+          python - <<'PY'
+          import json
+          import sys
+          import urllib.request
+          import urllib.error
+          from pathlib import Path
+          from datetime import datetime, timezone
+
+          BASE_URL = "http://localhost:8003"
+          SYMBOLS = [
+              "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
+              "META", "TSLA", "AMD", "AVGO", "NFLX"
+          ]
+
+          def post_json(path, payload):
+              req = urllib.request.Request(
+                  f"{BASE_URL}{path}",
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=180) as resp:
+                      return json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8")
+                  raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
+
+          def extract_candidates(response):
+              data = response.get("data") or {}
+              if isinstance(data, dict):
+                  return data.get("candidates") or []
+              return []
+
+          def has_dev_fallback(candidate):
+              metadata = candidate.get("metadata") or {}
+              return metadata.get("source") == "dev_fallback"
+
+          payload = {
+              "symbols": SYMBOLS,
+              "screener": "default",
+              "exchange": "US"
+          }
+
+          report = {
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "symbols_tested": SYMBOLS,
+              "technical_scan": None,
+              "fundamental_scan": None,
+              "checks": [],
+          }
+
+          failures = []
+
+          for name, path in [
+              ("technical_scan", "/scan"),
+              ("fundamental_scan", "/scan/fundamental"),
+          ]:
+              response = post_json(path, payload)
+              report[name] = response
+              candidates = extract_candidates(response)
+
+              check = {
+                  "section": name,
+                  "status": response.get("status"),
+                  "candidate_count": len(candidates),
+                  "symbols_found": [c.get("symbol") for c in candidates if isinstance(c, dict)],
+                  "has_dev_fallback": any(has_dev_fallback(c) for c in candidates if isinstance(c, dict)),
+              }
+              report["checks"].append(check)
+
+              if response.get("status") != "success":
+                  failures.append(f"{name}: response status is not success")
+              if not candidates:
+                  failures.append(f"{name}: scanner returned zero candidates")
+              if check["has_dev_fallback"]:
+                  failures.append(f"{name}: scanner used dev_fallback instead of real market scan")
+
+          Path("reports/scanner-market-smoke-test.json").write_text(
+              json.dumps(report, ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+
+          lines = []
+          lines.append("# Scanner Market Smoke Test")
+          lines.append("")
+          lines.append(f"Generated at UTC: `{report['generated_at']}`")
+          lines.append("")
+          lines.append("## Symbols Tested")
+          lines.append(", ".join(SYMBOLS))
+          lines.append("")
+          lines.append("## Results")
+          lines.append("| Section | Status | Candidate Count | Symbols Found | Dev Fallback |")
+          lines.append("|---|---|---:|---|---|")
+          for check in report["checks"]:
+              lines.append(
+                  f"| {check['section']} | {check['status']} | {check['candidate_count']} | "
+                  f"{', '.join([s for s in check['symbols_found'] if s]) or '-'} | {check['has_dev_fallback']} |"
+              )
+          lines.append("")
+
+          if failures:
+              lines.append("## Failures")
+              for failure in failures:
+                  lines.append(f"- {failure}")
+          else:
+              lines.append("## Verdict")
+              lines.append("Scanner_Agent returned real market candidates without dev fallback.")
+
+          Path("reports/scanner-market-smoke-test.md").write_text(
+              "\n".join(lines),
+              encoding="utf-8",
+          )
+
+          print("\n".join(lines))
+
+          if failures:
+              print("\nSmoke test failed:", file=sys.stderr)
+              for failure in failures:
+                  print(f"- {failure}", file=sys.stderr)
+              sys.exit(1)
+          PY
+
+      - name: Upload scanner smoke test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-market-smoke-test-report
+          path: reports/
+          if-no-files-found: warn
+
+      - name: Show Scanner_Agent logs
+        if: always()
+        run: |
+          docker logs scanner-agent || true
+
+      - name: Stop Scanner_Agent
+        if: always()
+        run: |
+          docker rm -f scanner-agent || true
