@@ -3,7 +3,15 @@ from fastapi import FastAPI, HTTPException
 from typing import Any, Dict, List, Optional
 from app.services.scanner import scan_market
 from app.services.long_term_scanner import scan_long_term
-from app.models import ScanRequest, ScannerResult, CandidateResult, StandardAgentResponse
+from app.services.fundamental_discovery import discover_best_fundamentals
+from app.models import (
+    BestFundamentalsRequest,
+    ScanRequest,
+    ScannerContractResult,
+    ScannerResult,
+    CandidateResult,
+    StandardAgentResponse,
+)
 from app.config import settings
 import logging
 
@@ -102,6 +110,42 @@ def health_check():
         "data": {"message": "healthy"},
         "error": None,
     }
+
+
+@app.post("/discover-best-fundamentals", response_model=StandardAgentResponse)
+def discover_best_fundamental_stocks(request: BestFundamentalsRequest):
+    """
+    Searches a broad US market universe, scores fundamentals, and returns
+    the top candidates for Manager_Agent to analyze more deeply.
+    """
+    if request.universe.upper() != "NASDAQ_SP500":
+        raise HTTPException(status_code=400, detail="Only NASDAQ_SP500 universe is currently supported.")
+
+    try:
+        candidates, errors, metadata = discover_best_fundamentals(
+            max_universe=request.max_universe,
+            top_n=request.top_n,
+            exchange=request.exchange,
+            max_workers=request.max_workers,
+        )
+    except Exception as exc:
+        logger.exception("Best fundamentals discovery failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    error_dict = _error_dict(errors) or {}
+    status = "success" if candidates else "error"
+    return StandardAgentResponse(
+        agent_type="scanner",
+        status=status,
+        data=ScannerContractResult(
+            scan_type="best_fundamentals",
+            count=len(candidates),
+            candidates=candidates,
+            metadata=metadata,
+            errors=error_dict,
+        ),
+        error=error_dict if not candidates else None,
+    )
 
 
 @app.post("/scan", response_model=StandardAgentResponse)
