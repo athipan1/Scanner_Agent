@@ -2,15 +2,33 @@ from typing import Optional, Dict, Any
 import pandas as pd
 
 
+def _is_empty(df: Any) -> bool:
+    try:
+        return df is None or df.empty
+    except Exception:
+        return True
+
+
+def _first_statement(*statements):
+    for statement in statements:
+        if not _is_empty(statement):
+            return statement
+    return None
+
+
 def _get_row(df: pd.DataFrame, row_names: list[str]):
     try:
-        if df is None or df.empty:
+        if _is_empty(df):
             return None
     except Exception:
         return None
+    normalized_index = {str(row).strip().lower(): row for row in df.index}
     for row in row_names:
         if row in df.index:
             return df.loc[row]
+        normalized = str(row).strip().lower()
+        if normalized in normalized_index:
+            return df.loc[normalized_index[normalized]]
     return None
 
 
@@ -24,19 +42,31 @@ def _safe_growth(latest: float, previous: float) -> Optional[float]:
 
 
 def _annual_income_statement(financial_data: Dict[str, Any]) -> pd.DataFrame:
-    return financial_data.get("annual_income_statement") or financial_data.get("income_statement")
+    return _first_statement(
+        financial_data.get("annual_income_statement"),
+        financial_data.get("income_statement"),
+    )
 
 
 def _annual_cash_flow(financial_data: Dict[str, Any]) -> pd.DataFrame:
-    return financial_data.get("annual_cash_flow") or financial_data.get("cash_flow")
+    return _first_statement(
+        financial_data.get("annual_cash_flow"),
+        financial_data.get("cash_flow"),
+    )
 
 
 def _quarterly_income_statement(financial_data: Dict[str, Any]) -> pd.DataFrame:
-    return financial_data.get("quarterly_income_statement") or financial_data.get("income_statement")
+    return _first_statement(
+        financial_data.get("quarterly_income_statement"),
+        financial_data.get("income_statement"),
+    )
 
 
 def _quarterly_cash_flow(financial_data: Dict[str, Any]) -> pd.DataFrame:
-    return financial_data.get("quarterly_cash_flow") or financial_data.get("cash_flow")
+    return _first_statement(
+        financial_data.get("quarterly_cash_flow"),
+        financial_data.get("cash_flow"),
+    )
 
 
 def _calculate_cagr_from_annual_row(row, years: int = 3) -> Optional[float]:
@@ -55,11 +85,29 @@ def _calculate_cagr_from_annual_row(row, years: int = 3) -> Optional[float]:
         return None
 
 
+REVENUE_ROWS = [
+    "Total Revenue",
+    "Operating Revenue",
+    "Total Revenues",
+    "Revenue",
+    "Insurance Revenue",
+    "Premiums Earned",
+    "Net Premiums Earned",
+    "Net Premiums Written",
+    "Total Premiums Earned",
+]
+
+EPS_ROWS = ["Basic EPS", "Diluted EPS", "Basic EPS From Continuing Operations", "Diluted EPS From Continuing Operations"]
+FCF_ROWS = ["Free Cash Flow"]
+OCF_ROWS = ["Operating Cash Flow", "Total Cash From Operating Activities", "Cash Flow From Continuing Operating Activities"]
+CAPEX_ROWS = ["Capital Expenditure", "Capital Expenditures", "Capital Expenditure Reported"]
+
+
 def calculate_revenue_cagr(financial_data: Dict[str, Any], years: int = 3) -> Optional[float]:
     """Calculate annual revenue CAGR over up to 3 fiscal years, returned as percent."""
     try:
         income_statement = _annual_income_statement(financial_data)
-        revenue_row = _get_row(income_statement, ["Total Revenue", "Operating Revenue"])
+        revenue_row = _get_row(income_statement, REVENUE_ROWS)
         if revenue_row is None:
             return None
         return _calculate_cagr_from_annual_row(revenue_row, years=years)
@@ -71,7 +119,7 @@ def calculate_eps_growth(financial_data: Dict[str, Any], years: int = 3) -> Opti
     """Calculate annual EPS growth over up to 3 fiscal years, returned as percent."""
     try:
         income_statement = _annual_income_statement(financial_data)
-        eps_row = _get_row(income_statement, ["Basic EPS", "Diluted EPS"])
+        eps_row = _get_row(income_statement, EPS_ROWS)
         if eps_row is None:
             return None
         clean = eps_row.dropna()
@@ -89,10 +137,10 @@ def calculate_fcf_growth(financial_data: Dict[str, Any], years: int = 3) -> Opti
     """Calculate annual free-cash-flow growth over up to 3 fiscal years, returned as percent."""
     try:
         cash_flow = _annual_cash_flow(financial_data)
-        fcf_row = _get_row(cash_flow, ["Free Cash Flow"])
+        fcf_row = _get_row(cash_flow, FCF_ROWS)
         if fcf_row is None:
-            ocf_row = _get_row(cash_flow, ["Operating Cash Flow", "Total Cash From Operating Activities"])
-            capex_row = _get_row(cash_flow, ["Capital Expenditure", "Capital Expenditures"])
+            ocf_row = _get_row(cash_flow, OCF_ROWS)
+            capex_row = _get_row(cash_flow, CAPEX_ROWS)
             if ocf_row is None or capex_row is None:
                 return None
             fcf_row = ocf_row + capex_row
@@ -111,7 +159,7 @@ def calculate_qoq_revenue_growth(financial_data: Dict[str, Any]) -> Optional[flo
     """Calculate latest quarter revenue growth versus previous quarter, returned as percent."""
     try:
         income_statement = _quarterly_income_statement(financial_data)
-        revenue_row = _get_row(income_statement, ["Total Revenue", "Operating Revenue"])
+        revenue_row = _get_row(income_statement, REVENUE_ROWS)
         if revenue_row is None or len(revenue_row.dropna()) < 2:
             return None
         clean = revenue_row.dropna()
@@ -124,7 +172,7 @@ def calculate_qoq_eps_growth(financial_data: Dict[str, Any]) -> Optional[float]:
     """Calculate latest quarter EPS growth versus previous quarter, returned as percent."""
     try:
         income_statement = _quarterly_income_statement(financial_data)
-        eps_row = _get_row(income_statement, ["Basic EPS", "Diluted EPS"])
+        eps_row = _get_row(income_statement, EPS_ROWS)
         if eps_row is None or len(eps_row.dropna()) < 2:
             return None
         clean = eps_row.dropna()
@@ -137,10 +185,10 @@ def calculate_qoq_fcf_growth(financial_data: Dict[str, Any]) -> Optional[float]:
     """Calculate latest quarter FCF growth versus previous quarter, returned as percent."""
     try:
         cash_flow = _quarterly_cash_flow(financial_data)
-        fcf_row = _get_row(cash_flow, ["Free Cash Flow"])
+        fcf_row = _get_row(cash_flow, FCF_ROWS)
         if fcf_row is None:
-            ocf_row = _get_row(cash_flow, ["Operating Cash Flow", "Total Cash From Operating Activities"])
-            capex_row = _get_row(cash_flow, ["Capital Expenditure", "Capital Expenditures"])
+            ocf_row = _get_row(cash_flow, OCF_ROWS)
+            capex_row = _get_row(cash_flow, CAPEX_ROWS)
             if ocf_row is None or capex_row is None:
                 return None
             fcf_row = ocf_row + capex_row
