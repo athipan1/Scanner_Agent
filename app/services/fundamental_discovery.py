@@ -31,6 +31,47 @@ def _pct_to_decimal(value: Any) -> Optional[float]:
     return value / 100.0
 
 
+def _statement_shape(statement: Any) -> Optional[Dict[str, int]]:
+    try:
+        if statement is None or statement.empty:
+            return None
+        return {"rows": int(statement.shape[0]), "columns": int(statement.shape[1])}
+    except Exception:
+        return None
+
+
+def _statement_rows(statement: Any, limit: int = 30) -> List[str]:
+    try:
+        if statement is None or statement.empty:
+            return []
+        return [str(row) for row in list(statement.index)[:limit]]
+    except Exception:
+        return []
+
+
+def _annual_diagnostics(financials: Dict[str, Any]) -> Dict[str, Any]:
+    annual_income = financials.get("annual_income_statement")
+    annual_cash_flow = financials.get("annual_cash_flow")
+    quarterly_income = financials.get("quarterly_income_statement")
+    quarterly_cash_flow = financials.get("quarterly_cash_flow")
+    return {
+        "yf_symbol": financials.get("yf_symbol"),
+        "has_annual_financials": bool(financials.get("has_annual_financials")),
+        "has_annual_income_statement": bool(financials.get("has_annual_income_statement")),
+        "has_annual_cash_flow": bool(financials.get("has_annual_cash_flow")),
+        "has_annual_balance_sheet": bool(financials.get("has_annual_balance_sheet")),
+        "has_quarterly_financials": bool(financials.get("has_quarterly_financials")),
+        "has_quarterly_income_statement": bool(financials.get("has_quarterly_income_statement")),
+        "has_quarterly_cash_flow": bool(financials.get("has_quarterly_cash_flow")),
+        "annual_income_statement_shape": _statement_shape(annual_income),
+        "annual_cash_flow_shape": _statement_shape(annual_cash_flow),
+        "quarterly_income_statement_shape": _statement_shape(quarterly_income),
+        "quarterly_cash_flow_shape": _statement_shape(quarterly_cash_flow),
+        "annual_income_statement_rows_sample": _statement_rows(annual_income),
+        "annual_cash_flow_rows_sample": _statement_rows(annual_cash_flow),
+    }
+
+
 def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
     """
     Builds a broad US universe with priority on S&P 500 + Nasdaq-100,
@@ -63,6 +104,8 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         raise ValueError("missing financial statements")
     if not market:
         raise ValueError("missing market data")
+
+    annual_diagnostics = _annual_diagnostics(financials)
 
     quality_metrics = {
         "roe": quality_analyzer.calculate_roe(financials),
@@ -111,6 +154,13 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         reasons.append(f"Revenue 3Y CAGR {float(growth_metrics['revenue_3y_cagr']):.2f}%")
     if growth_metrics.get("fcf_growth") is not None:
         reasons.append(f"FCF Growth {float(growth_metrics['fcf_growth']):.2f}%")
+    if annual_diagnostics.get("yf_symbol"):
+        reasons.append(f"Yahoo Finance symbol {annual_diagnostics['yf_symbol']}")
+    reasons.append(
+        "Annual diagnostics: "
+        f"income={annual_diagnostics.get('has_annual_income_statement')}, "
+        f"cash_flow={annual_diagnostics.get('has_annual_cash_flow')}"
+    )
 
     raw_scores = {
         "fundamental_score": round(float(final_score), 4),
@@ -134,6 +184,9 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         "peg_ratio": _safe_float(valuation_metrics.get("peg_ratio")),
         "pb_ratio": _safe_float(valuation_metrics.get("pb_ratio")),
         "market_cap": market.get("marketCap"),
+        "yf_symbol": annual_diagnostics.get("yf_symbol"),
+        "has_annual_income_statement": annual_diagnostics.get("has_annual_income_statement"),
+        "has_annual_cash_flow": annual_diagnostics.get("has_annual_cash_flow"),
     }
 
     return ScannerCandidateContract(
@@ -142,7 +195,7 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         recommendation_hint="FUNDAMENTAL_TOP_10",
         exchange=exchange,
         screener="america",
-        tags=["fundamental", "broad-market", "manager-handoff", "growth-v2"],
+        tags=["fundamental", "broad-market", "manager-handoff", "growth-v2", "annual-diagnostics"],
         reasons=reasons,
         raw_scores=raw_scores,
         metadata={
@@ -150,6 +203,10 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
             "sector": market.get("sector"),
             "industry": market.get("industry"),
             "growth_metrics": growth_metrics,
+            "annual_diagnostics": annual_diagnostics,
+            "yf_symbol": annual_diagnostics.get("yf_symbol"),
+            "has_annual_income_statement": annual_diagnostics.get("has_annual_income_statement"),
+            "has_annual_cash_flow": annual_diagnostics.get("has_annual_cash_flow"),
             "source": "real_market_fundamental_discovery",
         },
     )
@@ -194,6 +251,19 @@ def discover_best_fundamentals(
     for rank, candidate in enumerate(top_candidates, start=1):
         candidate.discovery_rank = rank
 
+    diagnostics = [
+        {
+            "symbol": candidate.symbol,
+            "yf_symbol": candidate.metadata.get("yf_symbol"),
+            "has_annual_income_statement": candidate.metadata.get("has_annual_income_statement"),
+            "has_annual_cash_flow": candidate.metadata.get("has_annual_cash_flow"),
+            "revenue_3y_cagr": candidate.raw_scores.get("revenue_3y_cagr"),
+            "eps_growth": candidate.raw_scores.get("eps_growth"),
+            "fcf_growth": candidate.raw_scores.get("fcf_growth"),
+        }
+        for candidate in top_candidates
+    ]
+
     metadata = {
         **universe_info["sources"],
         "analyzed_count": len(candidates),
@@ -208,5 +278,15 @@ def discover_best_fundamentals(
             "qoq_eps_growth",
             "qoq_fcf_growth",
         ],
+        "annual_diagnostics_fields": [
+            "yf_symbol",
+            "has_annual_income_statement",
+            "has_annual_cash_flow",
+            "annual_income_statement_shape",
+            "annual_cash_flow_shape",
+            "annual_income_statement_rows_sample",
+            "annual_cash_flow_rows_sample",
+        ],
+        "top_candidate_annual_diagnostics": diagnostics,
     }
     return top_candidates, errors, metadata
