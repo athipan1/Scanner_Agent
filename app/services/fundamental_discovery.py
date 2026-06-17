@@ -24,6 +24,13 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def _pct_to_decimal(value: Any) -> Optional[float]:
+    value = _safe_float(value)
+    if value is None:
+        return None
+    return value / 100.0
+
+
 def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
     """
     Builds a broad US universe with priority on S&P 500 + Nasdaq-100,
@@ -66,7 +73,13 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
     }
     growth_metrics = {
         "revenue_cagr": growth_analyzer.calculate_revenue_cagr(financials),
+        "revenue_3y_cagr": growth_analyzer.calculate_revenue_cagr(financials),
         "eps_growth": growth_analyzer.calculate_eps_growth(financials),
+        "fcf_growth": growth_analyzer.calculate_fcf_growth(financials),
+        "fcf_3y_cagr": growth_analyzer.calculate_fcf_growth(financials),
+        "qoq_revenue_growth": growth_analyzer.calculate_qoq_revenue_growth(financials),
+        "qoq_eps_growth": growth_analyzer.calculate_qoq_eps_growth(financials),
+        "qoq_fcf_growth": growth_analyzer.calculate_qoq_fcf_growth(financials),
     }
     valuation_metrics = {
         "pe_ratio": valuation_analyzer.get_pe_ratio(market),
@@ -94,6 +107,10 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         f"Growth {float(growth_score):.2f}" if growth_score is not None else "Growth data unavailable",
         f"Valuation {float(valuation_score):.2f}" if valuation_score is not None else "Valuation data unavailable",
     ]
+    if growth_metrics.get("revenue_3y_cagr") is not None:
+        reasons.append(f"Revenue 3Y CAGR {float(growth_metrics['revenue_3y_cagr']):.2f}%")
+    if growth_metrics.get("fcf_growth") is not None:
+        reasons.append(f"FCF Growth {float(growth_metrics['fcf_growth']):.2f}%")
 
     raw_scores = {
         "fundamental_score": round(float(final_score), 4),
@@ -106,7 +123,13 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         "free_cash_flow": _safe_float(quality_metrics.get("free_cash_flow")),
         "profit_margins": _safe_float(quality_metrics.get("profit_margins")),
         "revenue_cagr": _safe_float(growth_metrics.get("revenue_cagr")),
-        "eps_growth": _safe_float(growth_metrics.get("eps_growth")),
+        "revenue_3y_cagr": _pct_to_decimal(growth_metrics.get("revenue_3y_cagr")),
+        "eps_growth": _pct_to_decimal(growth_metrics.get("eps_growth")),
+        "fcf_growth": _pct_to_decimal(growth_metrics.get("fcf_growth")),
+        "fcf_3y_cagr": _pct_to_decimal(growth_metrics.get("fcf_3y_cagr")),
+        "qoq_revenue_growth": _pct_to_decimal(growth_metrics.get("qoq_revenue_growth")),
+        "qoq_eps_growth": _pct_to_decimal(growth_metrics.get("qoq_eps_growth")),
+        "qoq_fcf_growth": _pct_to_decimal(growth_metrics.get("qoq_fcf_growth")),
         "pe_ratio": _safe_float(valuation_metrics.get("pe_ratio")),
         "peg_ratio": _safe_float(valuation_metrics.get("peg_ratio")),
         "pb_ratio": _safe_float(valuation_metrics.get("pb_ratio")),
@@ -119,13 +142,14 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         recommendation_hint="FUNDAMENTAL_TOP_10",
         exchange=exchange,
         screener="america",
-        tags=["fundamental", "broad-market", "manager-handoff"],
+        tags=["fundamental", "broad-market", "manager-handoff", "growth-v2"],
         reasons=reasons,
         raw_scores=raw_scores,
         metadata={
             "grade": fundamental_score.get_grade(final_score),
             "sector": market.get("sector"),
             "industry": market.get("industry"),
+            "growth_metrics": growth_metrics,
             "source": "real_market_fundamental_discovery",
         },
     )
@@ -159,6 +183,8 @@ def discover_best_fundamentals(
             c.candidate_score or 0.0,
             c.raw_scores.get("quality_score") or 0.0,
             c.raw_scores.get("growth_score") or 0.0,
+            c.raw_scores.get("revenue_3y_cagr") or 0.0,
+            c.raw_scores.get("fcf_growth") or 0.0,
             c.raw_scores.get("valuation_score") or 0.0,
         ),
         reverse=True,
@@ -174,5 +200,13 @@ def discover_best_fundamentals(
         "error_count": len(errors),
         "top_n": top_n,
         "exchange": exchange,
+        "growth_v2_fields": [
+            "revenue_3y_cagr",
+            "eps_growth",
+            "fcf_growth",
+            "qoq_revenue_growth",
+            "qoq_eps_growth",
+            "qoq_fcf_growth",
+        ],
     }
     return top_candidates, errors, metadata
