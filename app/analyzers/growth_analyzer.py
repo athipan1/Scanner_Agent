@@ -1,9 +1,13 @@
 from typing import Optional, Dict, Any
 import pandas as pd
-import numpy as np
 
 
 def _get_row(df: pd.DataFrame, row_names: list[str]):
+    try:
+        if df is None or df.empty:
+            return None
+    except Exception:
+        return None
     for row in row_names:
         if row in df.index:
             return df.loc[row]
@@ -19,47 +23,72 @@ def _safe_growth(latest: float, previous: float) -> Optional[float]:
         return None
 
 
-def calculate_revenue_cagr(financial_data: Dict[str, Any], years: int = 3) -> Optional[float]:
-    """Calculates the Compound Annual Growth Rate of revenue over a specified period."""
+def _annual_income_statement(financial_data: Dict[str, Any]) -> pd.DataFrame:
+    return financial_data.get("annual_income_statement") or financial_data.get("income_statement")
+
+
+def _annual_cash_flow(financial_data: Dict[str, Any]) -> pd.DataFrame:
+    return financial_data.get("annual_cash_flow") or financial_data.get("cash_flow")
+
+
+def _quarterly_income_statement(financial_data: Dict[str, Any]) -> pd.DataFrame:
+    return financial_data.get("quarterly_income_statement") or financial_data.get("income_statement")
+
+
+def _quarterly_cash_flow(financial_data: Dict[str, Any]) -> pd.DataFrame:
+    return financial_data.get("quarterly_cash_flow") or financial_data.get("cash_flow")
+
+
+def _calculate_cagr_from_annual_row(row, years: int = 3) -> Optional[float]:
     try:
-        income_statement = financial_data["income_statement"]
+        clean = row.dropna()
+        if len(clean) < 2:
+            return None
+        latest = float(clean.iloc[0])
+        oldest_index = min(len(clean) - 1, years)
+        oldest = float(clean.iloc[oldest_index])
+        periods = max(1, oldest_index)
+        if oldest <= 0 or latest <= 0:
+            return None
+        return (((latest / oldest) ** (1 / periods)) - 1) * 100
+    except Exception:
+        return None
+
+
+def calculate_revenue_cagr(financial_data: Dict[str, Any], years: int = 3) -> Optional[float]:
+    """Calculate annual revenue CAGR over up to 3 fiscal years, returned as percent."""
+    try:
+        income_statement = _annual_income_statement(financial_data)
         revenue_row = _get_row(income_statement, ["Total Revenue", "Operating Revenue"])
         if revenue_row is None:
             return None
-        if len(income_statement.columns) < (years * 4):
-            return None
-
-        ltm_revenue = revenue_row.iloc[:4].sum()
-        nyears_ago_revenue = revenue_row.iloc[(years * 4 - 4):(years * 4)].sum()
-        if nyears_ago_revenue <= 0 or ltm_revenue <= 0:
-            return None
-        cagr = ((ltm_revenue / nyears_ago_revenue) ** (1 / years)) - 1
-        return cagr * 100
-    except (KeyError, IndexError, TypeError, ValueError):
+        return _calculate_cagr_from_annual_row(revenue_row, years=years)
+    except Exception:
         return None
 
 
 def calculate_eps_growth(financial_data: Dict[str, Any], years: int = 3) -> Optional[float]:
-    """Calculates EPS growth over a specified period."""
+    """Calculate annual EPS growth over up to 3 fiscal years, returned as percent."""
     try:
-        income_statement = financial_data["income_statement"]
+        income_statement = _annual_income_statement(financial_data)
         eps_row = _get_row(income_statement, ["Basic EPS", "Diluted EPS"])
         if eps_row is None:
             return None
-        if len(income_statement.columns) < (years * 4):
+        clean = eps_row.dropna()
+        if len(clean) < 2:
             return None
-
-        ltm_eps = eps_row.iloc[:4].sum()
-        nyears_ago_eps = eps_row.iloc[(years * 4 - 4):(years * 4)].sum()
-        return _safe_growth(ltm_eps, nyears_ago_eps)
-    except (KeyError, IndexError, TypeError, ValueError):
+        latest = float(clean.iloc[0])
+        oldest_index = min(len(clean) - 1, years)
+        previous = float(clean.iloc[oldest_index])
+        return _safe_growth(latest, previous)
+    except Exception:
         return None
 
 
 def calculate_fcf_growth(financial_data: Dict[str, Any], years: int = 3) -> Optional[float]:
-    """Calculates Free Cash Flow growth over a specified period using quarterly cash flow data."""
+    """Calculate annual free-cash-flow growth over up to 3 fiscal years, returned as percent."""
     try:
-        cash_flow = financial_data["cash_flow"]
+        cash_flow = _annual_cash_flow(financial_data)
         fcf_row = _get_row(cash_flow, ["Free Cash Flow"])
         if fcf_row is None:
             ocf_row = _get_row(cash_flow, ["Operating Cash Flow", "Total Cash From Operating Activities"])
@@ -67,44 +96,47 @@ def calculate_fcf_growth(financial_data: Dict[str, Any], years: int = 3) -> Opti
             if ocf_row is None or capex_row is None:
                 return None
             fcf_row = ocf_row + capex_row
-        if len(cash_flow.columns) < (years * 4):
+        clean = fcf_row.dropna()
+        if len(clean) < 2:
             return None
-
-        ltm_fcf = fcf_row.iloc[:4].sum()
-        nyears_ago_fcf = fcf_row.iloc[(years * 4 - 4):(years * 4)].sum()
-        return _safe_growth(ltm_fcf, nyears_ago_fcf)
-    except (KeyError, IndexError, TypeError, ValueError):
+        latest = float(clean.iloc[0])
+        oldest_index = min(len(clean) - 1, years)
+        previous = float(clean.iloc[oldest_index])
+        return _safe_growth(latest, previous)
+    except Exception:
         return None
 
 
 def calculate_qoq_revenue_growth(financial_data: Dict[str, Any]) -> Optional[float]:
-    """Calculates quarter-over-quarter revenue growth."""
+    """Calculate latest quarter revenue growth versus previous quarter, returned as percent."""
     try:
-        income_statement = financial_data["income_statement"]
+        income_statement = _quarterly_income_statement(financial_data)
         revenue_row = _get_row(income_statement, ["Total Revenue", "Operating Revenue"])
-        if revenue_row is None or len(revenue_row) < 2:
+        if revenue_row is None or len(revenue_row.dropna()) < 2:
             return None
-        return _safe_growth(revenue_row.iloc[0], revenue_row.iloc[1])
-    except (KeyError, IndexError, TypeError, ValueError):
+        clean = revenue_row.dropna()
+        return _safe_growth(clean.iloc[0], clean.iloc[1])
+    except Exception:
         return None
 
 
 def calculate_qoq_eps_growth(financial_data: Dict[str, Any]) -> Optional[float]:
-    """Calculates quarter-over-quarter EPS growth."""
+    """Calculate latest quarter EPS growth versus previous quarter, returned as percent."""
     try:
-        income_statement = financial_data["income_statement"]
+        income_statement = _quarterly_income_statement(financial_data)
         eps_row = _get_row(income_statement, ["Basic EPS", "Diluted EPS"])
-        if eps_row is None or len(eps_row) < 2:
+        if eps_row is None or len(eps_row.dropna()) < 2:
             return None
-        return _safe_growth(eps_row.iloc[0], eps_row.iloc[1])
-    except (KeyError, IndexError, TypeError, ValueError):
+        clean = eps_row.dropna()
+        return _safe_growth(clean.iloc[0], clean.iloc[1])
+    except Exception:
         return None
 
 
 def calculate_qoq_fcf_growth(financial_data: Dict[str, Any]) -> Optional[float]:
-    """Calculates quarter-over-quarter Free Cash Flow growth."""
+    """Calculate latest quarter FCF growth versus previous quarter, returned as percent."""
     try:
-        cash_flow = financial_data["cash_flow"]
+        cash_flow = _quarterly_cash_flow(financial_data)
         fcf_row = _get_row(cash_flow, ["Free Cash Flow"])
         if fcf_row is None:
             ocf_row = _get_row(cash_flow, ["Operating Cash Flow", "Total Cash From Operating Activities"])
@@ -112,8 +144,9 @@ def calculate_qoq_fcf_growth(financial_data: Dict[str, Any]) -> Optional[float]:
             if ocf_row is None or capex_row is None:
                 return None
             fcf_row = ocf_row + capex_row
-        if len(fcf_row) < 2:
+        clean = fcf_row.dropna()
+        if len(clean) < 2:
             return None
-        return _safe_growth(fcf_row.iloc[0], fcf_row.iloc[1])
-    except (KeyError, IndexError, TypeError, ValueError):
+        return _safe_growth(clean.iloc[0], clean.iloc[1])
+    except Exception:
         return None
