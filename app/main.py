@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from app.services.scanner import scan_market
 from app.services.long_term_scanner import scan_long_term
 from app.services.fundamental_discovery import discover_best_fundamentals
@@ -50,6 +50,15 @@ def _raise_live_dev_fallback_forbidden(scan_type: str):
         status_code=503,
         detail=f"Scanner dev fallback is forbidden in LIVE mode for {scan_type} scans.",
     )
+
+
+def _normalize_market_inputs(screener: str, exchange: str) -> Tuple[str, str]:
+    normalized_exchange = (exchange or "NASDAQ").upper()
+    normalized_screener = (screener or "america").lower()
+    if normalized_exchange in {"US", "USA", "NASDAQ", "NYSE", "AMEX"}:
+        normalized_screener = "america" if normalized_screener in {"default", "us", "usa", "stock"} else normalized_screener
+        normalized_exchange = "NASDAQ" if normalized_exchange in {"US", "USA"} else normalized_exchange
+    return normalized_screener, normalized_exchange
 
 
 def _get_value(candidate: Any, key: str, default: Any = None) -> Any:
@@ -111,6 +120,52 @@ def _mock_candidates(symbols: List[str], scan_type: str) -> List[CandidateResult
     ]
 
 
+def _market_watchlist_candidates(symbols: List[str], scan_type: str, exchange: str) -> List[CandidateResult]:
+    """Builds a non-dev fallback watchlist from live yfinance market metadata.
+
+    This is intentionally not a trading signal. It keeps smoke tests and discovery
+    flows useful when no BUY candidates pass strict thresholds, without ever using
+    mock/dev candidates in LIVE mode.
+    """
+    candidates: List[CandidateResult] = []
+    try:
+        import yfinance as yf
+    except Exception as exc:
+        logger.warning("yfinance unavailable for market watchlist fallback: %s", exc)
+        return []
+
+    for symbol in symbols[:10]:
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info or {}
+            price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+            market_cap = info.get("marketCap")
+            if price is None and market_cap is None:
+                continue
+            score = 0.50
+            if isinstance(market_cap, (int, float)) and market_cap > 0:
+                score = 0.55
+            candidates.append(CandidateResult(
+                symbol=symbol,
+                confidence_score=score,
+                recommendation="WATCHLIST",
+                metadata={
+                    "source": "yfinance_market_data",
+                    "scan_type": scan_type,
+                    "selection_mode": "watchlist_no_buy_signal",
+                    "exchange": exchange,
+                    "current_price": price,
+                    "market_cap": market_cap,
+                    "sector": info.get("sector"),
+                    "industry": info.get("industry"),
+                },
+            ))
+        except Exception as exc:
+            logger.debug("market watchlist fallback failed for %s: %s", symbol, exc)
+            continue
+    return candidates
+
+
 def _error_dict(errors: Any) -> Optional[Dict[str, str]]:
     if not errors:
         return None
@@ -124,9 +179,6 @@ def _error_dict(errors: Any) -> Optional[Dict[str, str]]:
 
 @app.get("/health")
 def health_check():
-    """
-    Lightweight healthcheck endpoint for Docker.
-    """
     return {
         "status": "success",
         "agent_type": "scanner",
@@ -140,10 +192,6 @@ def health_check():
 
 @app.post("/discover-best-fundamentals", response_model=StandardAgentResponse)
 def discover_best_fundamental_stocks(request: BestFundamentalsRequest):
-    """
-    Searches a broad US market universe, scores fundamentals, and returns
-    the top candidates for Manager_Agent to analyze more deeply.
-    """
     if request.universe.upper() != "NASDAQ_SP500":
         raise HTTPException(status_code=400, detail="Only NASDAQ_SP500 universe is currently supported.")
 
@@ -176,11 +224,8 @@ def discover_best_fundamental_stocks(request: BestFundamentalsRequest):
 
 @app.post("/scan", response_model=StandardAgentResponse)
 def scan_stocks(request: ScanRequest):
-    """
-    Accepts a list of symbols to scan. If the list is empty,
-    it scans a default list of top Thai stocks.
-    """
     symbols_to_scan = request.symbols if request.symbols else settings.DEFAULT_SYMBOLS
+    screener, exchange = _normalize_market_inputs(request.screener, request.exchange)
 
     if not symbols_to_scan:
         raise HTTPException(status_code=400, detail="Symbol list cannot be empty if provided.")
@@ -188,8 +233,8 @@ def scan_stocks(request: ScanRequest):
     try:
         candidates_raw, errors = scan_market(
             symbols=symbols_to_scan,
-            screener=request.screener,
-            exchange=request.exchange
+            screener=screener,
+            exchange=exchange,
         )
     except Exception:
         logger.exception("Technical scan failed")
@@ -213,26 +258,29 @@ def scan_stocks(request: ScanRequest):
         candidates = _mock_candidates(symbols_to_scan, scan_type="technical")
         error_dict = error_dict or {"dev_fallback": "Scanner returned no candidates; dev fallback candidates were generated."}
 
-    status = "error" if (not candidates and error_dict) else "success"
+    if not candidates and not settings.SCANNER_DEV_MODE:
+        candidates = _market_watchlist_candidates(symbols_to_scan, "technical", exchange)
+        if candidates:
+            error_dict = error_dict or {}
+            error_dict["watchlist_fallback"] = "No BUY candidates passed strict scanner thresholds; returned real market watchlist candidates."
+
+    status = "success" if candidates else "error" if error_dict else "success"
     return StandardAgentResponse(
         agent_type="scanner",
         status=status,
         data=ScannerResult(
             scan_type="technical",
             count=len(candidates),
-            candidates=candidates
+            candidates=candidates,
         ),
-        error=error_dict
+        error=error_dict,
     )
 
 
 @app.post("/scan/fundamental", response_model=StandardAgentResponse)
 def scan_fundamental_stocks(request: ScanRequest):
-    """
-    Accepts a list of symbols to scan for long-term investment opportunities.
-    If the list is empty, it scans a default list of top Thai stocks.
-    """
     symbols_to_scan = request.symbols if request.symbols else settings.DEFAULT_SYMBOLS
+    _, exchange = _normalize_market_inputs(request.screener, request.exchange)
 
     if not symbols_to_scan:
         raise HTTPException(status_code=400, detail="Symbol list cannot be empty if provided.")
@@ -240,7 +288,7 @@ def scan_fundamental_stocks(request: ScanRequest):
     try:
         candidates_raw, errors = scan_long_term(
             symbols=symbols_to_scan,
-            exchange=request.exchange
+            exchange=exchange,
         )
     except Exception:
         logger.exception("Fundamental scan failed")
@@ -264,14 +312,20 @@ def scan_fundamental_stocks(request: ScanRequest):
         candidates = _mock_candidates(symbols_to_scan, scan_type="fundamental")
         error_dict = error_dict or {"dev_fallback": "Scanner returned no candidates; dev fallback candidates were generated."}
 
-    status = "error" if (not candidates and error_dict) else "success"
+    if not candidates and not settings.SCANNER_DEV_MODE:
+        candidates = _market_watchlist_candidates(symbols_to_scan, "fundamental", exchange)
+        if candidates:
+            error_dict = error_dict or {}
+            error_dict["watchlist_fallback"] = "No fundamental candidates passed strict scanner requirements; returned real market watchlist candidates."
+
+    status = "success" if candidates else "error" if error_dict else "success"
     return StandardAgentResponse(
         agent_type="scanner",
         status=status,
         data=ScannerResult(
             scan_type="fundamental",
             count=len(candidates),
-            candidates=candidates
+            candidates=candidates,
         ),
-        error=error_dict
+        error=error_dict,
     )
