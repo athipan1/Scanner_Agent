@@ -6,6 +6,7 @@ from app.analyzers import quality_analyzer, growth_analyzer, valuation_analyzer
 from app.scoring import fundamental_score
 from app.models import ErrorDetail, FundamentalCandidate, QualityMetrics, GrowthMetrics, ValuationMetrics
 
+
 def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalCandidate]:
     """
     Performs a full fundamental analysis on a single stock symbol.
@@ -16,7 +17,6 @@ def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalC
     if not financials or not market:
         raise ValueError("Missing essential financial or market data")
 
-    # --- Analysis ---
     quality_metrics = {
         "roe": quality_analyzer.calculate_roe(financials),
         "roa": quality_analyzer.calculate_roa(financials),
@@ -36,7 +36,6 @@ def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalC
         "pb_ratio": valuation_analyzer.get_pb_ratio(market),
     }
 
-    # --- Scoring ---
     quality_score = fundamental_score.calculate_quality_score(quality_metrics)
     growth_score = fundamental_score.calculate_growth_score(growth_metrics)
     valuation_score = fundamental_score.calculate_valuation_score(valuation_metrics)
@@ -46,15 +45,12 @@ def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalC
         "growth_score": growth_score,
         "valuation_score": valuation_score,
     }
-
     final_score = fundamental_score.calculate_fundamental_score(scores)
 
     if final_score is None:
         raise ValueError("Could not calculate a final score due to missing data")
 
     grade = fundamental_score.get_grade(final_score)
-
-    # --- Thesis Generation (Template-based) ---
     thesis = (
         f"{symbol} demonstrates {'strong' if quality_score > 70 else 'fair'} business quality, "
         f"with {'robust' if growth_score > 70 else 'moderate'} growth prospects. "
@@ -71,12 +67,13 @@ def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalC
         thesis=thesis,
     )
 
+
 def scan_long_term(symbols: List[str], exchange: str = "SET") -> Tuple[List[FundamentalCandidate], List[ErrorDetail]]:
     """
     Scans a list of stock symbols for long-term investment opportunities.
     """
-    candidates = []
-    errors = []
+    candidates: List[FundamentalCandidate] = []
+    errors: List[ErrorDetail] = []
 
     with ThreadPoolExecutor(max_workers=10) as executor:
         future_to_symbol = {executor.submit(analyze_stock, symbol, exchange): symbol for symbol in symbols}
@@ -85,11 +82,9 @@ def scan_long_term(symbols: List[str], exchange: str = "SET") -> Tuple[List[Fund
             symbol = future_to_symbol[future]
             try:
                 _, result = future.result()
-                candidates.append({"symbol": symbol, **result})
+                candidates.append(result)
             except Exception as e:
                 errors.append(ErrorDetail(symbol=symbol, error=str(e)))
 
-    # Rank candidates by fundamental_score
-    candidates.sort(key=lambda x: x.fundamental_score, reverse=True)
-
+    candidates.sort(key=lambda candidate: candidate.fundamental_score, reverse=True)
     return candidates, errors
