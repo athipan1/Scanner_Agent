@@ -1,9 +1,19 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
+    TRADING_MODE: str = "PAPER"
     SCANNER_DEV_MODE: bool = False
+
+    @field_validator("TRADING_MODE")
+    @classmethod
+    def validate_trading_mode(cls, value: str) -> str:
+        mode = str(value or "PAPER").upper()
+        if mode not in {"PAPER", "LIVE"}:
+            raise ValueError("TRADING_MODE must be PAPER or LIVE")
+        return mode
 
     # Scoring weights
     QUALITY_SCORE_WEIGHT: float = 0.40
