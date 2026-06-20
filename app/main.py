@@ -33,6 +33,14 @@ def _trading_mode() -> str:
     return str(settings.TRADING_MODE or "PAPER").upper()
 
 
+def _scanner_runtime_metadata() -> Dict[str, Any]:
+    return {
+        "trading_mode": _trading_mode(),
+        "scanner_dev_mode": settings.SCANNER_DEV_MODE,
+        "dev_fallback_allowed": _dev_fallback_allowed(),
+    }
+
+
 def _dev_fallback_allowed() -> bool:
     return bool(settings.SCANNER_DEV_MODE) and _trading_mode() != "LIVE"
 
@@ -124,12 +132,8 @@ def health_check():
         "agent_type": "scanner",
         "version": "1.0.0",
         "timestamp": _utc_timestamp(),
-        "data": {
-            "message": "healthy",
-            "trading_mode": _trading_mode(),
-            "scanner_dev_mode": settings.SCANNER_DEV_MODE,
-            "dev_fallback_allowed": _dev_fallback_allowed(),
-        },
+        "data": {"message": "healthy"},
+        "metadata": _scanner_runtime_metadata(),
         "error": None,
     }
 
