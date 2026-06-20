@@ -16,10 +16,12 @@ def test_health_exposes_dev_fallback_status():
         response = client.get("/health")
 
     assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["trading_mode"] == "LIVE"
-    assert data["scanner_dev_mode"] is True
-    assert data["dev_fallback_allowed"] is False
+    body = response.json()
+    assert body["data"] == {"message": "healthy"}
+    metadata = body["metadata"]
+    assert metadata["trading_mode"] == "LIVE"
+    assert metadata["scanner_dev_mode"] is True
+    assert metadata["dev_fallback_allowed"] is False
 
 
 def test_mock_candidates_forbidden_in_live():
