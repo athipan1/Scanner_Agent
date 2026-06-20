@@ -29,6 +29,29 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _trading_mode() -> str:
+    return str(settings.TRADING_MODE or "PAPER").upper()
+
+
+def _scanner_runtime_metadata() -> Dict[str, Any]:
+    return {
+        "trading_mode": _trading_mode(),
+        "scanner_dev_mode": settings.SCANNER_DEV_MODE,
+        "dev_fallback_allowed": _dev_fallback_allowed(),
+    }
+
+
+def _dev_fallback_allowed() -> bool:
+    return bool(settings.SCANNER_DEV_MODE) and _trading_mode() != "LIVE"
+
+
+def _raise_live_dev_fallback_forbidden(scan_type: str):
+    raise HTTPException(
+        status_code=503,
+        detail=f"Scanner dev fallback is forbidden in LIVE mode for {scan_type} scans.",
+    )
+
+
 def _get_value(candidate: Any, key: str, default: Any = None) -> Any:
     if isinstance(candidate, dict):
         return candidate.get(key, default)
@@ -75,6 +98,8 @@ def _normalize_candidate(candidate: Any, default_recommendation: str = "hold") -
 
 
 def _mock_candidates(symbols: List[str], scan_type: str) -> List[CandidateResult]:
+    if not _dev_fallback_allowed():
+        _raise_live_dev_fallback_forbidden(scan_type)
     return [
         CandidateResult(
             symbol=symbol,
@@ -108,6 +133,7 @@ def health_check():
         "version": "1.0.0",
         "timestamp": _utc_timestamp(),
         "data": {"message": "healthy"},
+        "metadata": _scanner_runtime_metadata(),
         "error": None,
     }
 
@@ -167,7 +193,9 @@ def scan_stocks(request: ScanRequest):
         )
     except Exception:
         logger.exception("Technical scan failed")
-        if not settings.SCANNER_DEV_MODE:
+        if settings.SCANNER_DEV_MODE and _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("technical")
+        if not _dev_fallback_allowed():
             raise
         candidates_raw, errors = [], []
 
@@ -180,6 +208,8 @@ def scan_stocks(request: ScanRequest):
 
     error_dict = _error_dict(errors)
     if not candidates and settings.SCANNER_DEV_MODE:
+        if _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("technical")
         candidates = _mock_candidates(symbols_to_scan, scan_type="technical")
         error_dict = error_dict or {"dev_fallback": "Scanner returned no candidates; dev fallback candidates were generated."}
 
@@ -214,7 +244,9 @@ def scan_fundamental_stocks(request: ScanRequest):
         )
     except Exception:
         logger.exception("Fundamental scan failed")
-        if not settings.SCANNER_DEV_MODE:
+        if settings.SCANNER_DEV_MODE and _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("fundamental")
+        if not _dev_fallback_allowed():
             raise
         candidates_raw, errors = [], []
 
@@ -227,6 +259,8 @@ def scan_fundamental_stocks(request: ScanRequest):
 
     error_dict = _error_dict(errors)
     if not candidates and settings.SCANNER_DEV_MODE:
+        if _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("fundamental")
         candidates = _mock_candidates(symbols_to_scan, scan_type="fundamental")
         error_dict = error_dict or {"dev_fallback": "Scanner returned no candidates; dev fallback candidates were generated."}
 
