@@ -7,6 +7,7 @@ from app.analyzers import growth_analyzer, quality_analyzer, valuation_analyzer
 from app.data_sources import financial_statements, market_data
 from app.models import ErrorDetail, ScannerCandidateContract
 from app.scoring import fundamental_score
+from app.services.bucket_hints import build_strategy_bucket_hints
 from app.universe import (
     load_nasdaq100_symbols,
     load_nasdaq_listed_symbols,
@@ -208,6 +209,18 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         "has_annual_income_statement": annual_diagnostics.get("has_annual_income_statement"),
         "has_annual_cash_flow": annual_diagnostics.get("has_annual_cash_flow"),
     }
+    base_metadata = {
+        "grade": fundamental_score.get_grade(final_score),
+        "sector": market.get("sector"),
+        "industry": market.get("industry"),
+        "growth_metrics": growth_metrics,
+        "annual_diagnostics": annual_diagnostics,
+        "yf_symbol": annual_diagnostics.get("yf_symbol"),
+        "has_annual_income_statement": annual_diagnostics.get("has_annual_income_statement"),
+        "has_annual_cash_flow": annual_diagnostics.get("has_annual_cash_flow"),
+        "source": "real_market_fundamental_discovery",
+    }
+    bucket_hints = build_strategy_bucket_hints(raw_scores, base_metadata)
 
     return ScannerCandidateContract(
         symbol=symbol,
@@ -215,20 +228,10 @@ def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> Scan
         recommendation_hint="FUNDAMENTAL_TOP_10",
         exchange=exchange,
         screener="america",
-        tags=["fundamental", "broad-market", "manager-handoff", "growth-v2", "annual-diagnostics"],
-        reasons=reasons,
+        tags=["fundamental", "broad-market", "manager-handoff", "growth-v2", "annual-diagnostics", *bucket_hints.get("bucket_hint_tags", [])],
+        reasons=[*reasons, f"Primary bucket hint {bucket_hints.get('primary_strategy_bucket_hint')}"],
         raw_scores=raw_scores,
-        metadata={
-            "grade": fundamental_score.get_grade(final_score),
-            "sector": market.get("sector"),
-            "industry": market.get("industry"),
-            "growth_metrics": growth_metrics,
-            "annual_diagnostics": annual_diagnostics,
-            "yf_symbol": annual_diagnostics.get("yf_symbol"),
-            "has_annual_income_statement": annual_diagnostics.get("has_annual_income_statement"),
-            "has_annual_cash_flow": annual_diagnostics.get("has_annual_cash_flow"),
-            "source": "real_market_fundamental_discovery",
-        },
+        metadata={**base_metadata, **bucket_hints},
     )
 
 
@@ -277,6 +280,8 @@ def discover_best_fundamentals(
         {
             "symbol": candidate.symbol,
             "yf_symbol": candidate.metadata.get("yf_symbol"),
+            "primary_strategy_bucket_hint": candidate.metadata.get("primary_strategy_bucket_hint"),
+            "bucket_hint_scores": candidate.metadata.get("bucket_hint_scores"),
             "has_annual_income_statement": candidate.metadata.get("has_annual_income_statement"),
             "has_annual_cash_flow": candidate.metadata.get("has_annual_cash_flow"),
             "revenue_3y_cagr": candidate.raw_scores.get("revenue_3y_cagr"),
@@ -293,23 +298,16 @@ def discover_best_fundamentals(
         "top_n": top_n,
         "exchange": exchange,
         "excluded_non_tradable_symbols": sorted(_NON_TRADABLE_DISCOVERY_SYMBOLS),
+        "bucket_hints_enabled": True,
         "growth_v2_fields": [
             "revenue_3y_cagr",
             "eps_growth",
             "fcf_growth",
+            "fcf_3y_cagr",
             "qoq_revenue_growth",
             "qoq_eps_growth",
             "qoq_fcf_growth",
         ],
-        "annual_diagnostics_fields": [
-            "yf_symbol",
-            "has_annual_income_statement",
-            "has_annual_cash_flow",
-            "annual_income_statement_shape",
-            "annual_cash_flow_shape",
-            "annual_income_statement_rows_sample",
-            "annual_cash_flow_rows_sample",
-        ],
-        "top_candidate_annual_diagnostics": diagnostics,
+        "diagnostics": diagnostics,
     }
     return top_candidates, errors, metadata
