@@ -14,6 +14,19 @@ from app.universe import (
     normalize_symbols,
 )
 
+_NON_TRADABLE_DISCOVERY_SYMBOLS = {"CASH", "USD", "USDT", "USDC"}
+
+
+def _is_discoverable_stock_symbol(symbol: str) -> bool:
+    symbol = str(symbol or "").strip().upper()
+    if not symbol:
+        return False
+    if symbol in _NON_TRADABLE_DISCOVERY_SYMBOLS:
+        return False
+    if "/" in symbol or ":" in symbol:
+        return False
+    return True
+
 
 def _safe_float(value: Any) -> Optional[float]:
     try:
@@ -80,7 +93,9 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
     sp500 = load_sp500_symbols()
     nasdaq100 = load_nasdaq100_symbols()
     nasdaq_listed = load_nasdaq_listed_symbols()
-    symbols = normalize_symbols(sp500 + nasdaq100 + nasdaq_listed)
+    raw_symbols = normalize_symbols(sp500 + nasdaq100 + nasdaq_listed)
+    symbols = [symbol for symbol in raw_symbols if _is_discoverable_stock_symbol(symbol)]
+    excluded_count = len(raw_symbols) - len(symbols)
 
     if max_universe and max_universe > 0:
         symbols = symbols[:max_universe]
@@ -91,12 +106,17 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
             "sp500_count": len(sp500),
             "nasdaq100_count": len(nasdaq100),
             "nasdaq_listed_count": len(nasdaq_listed),
+            "excluded_non_tradable_symbol_count": excluded_count,
             "selected_universe_count": len(symbols),
         },
     }
 
 
 def analyze_fundamental_candidate(symbol: str, exchange: str = "NASDAQ") -> ScannerCandidateContract:
+    symbol = str(symbol or "").strip().upper()
+    if not _is_discoverable_stock_symbol(symbol):
+        raise ValueError(f"non-tradable discovery symbol: {symbol}")
+
     financials = financial_statements.get_financials(symbol, exchange)
     market = market_data.get_market_data(symbol, exchange)
 
@@ -219,7 +239,7 @@ def discover_best_fundamentals(
     max_workers: int = 10,
 ) -> Tuple[List[ScannerCandidateContract], List[ErrorDetail], Dict[str, Any]]:
     universe_info = build_us_fundamental_universe(max_universe=max_universe)
-    symbols = universe_info["symbols"]
+    symbols = [symbol for symbol in universe_info["symbols"] if _is_discoverable_stock_symbol(symbol)]
     candidates: List[ScannerCandidateContract] = []
     errors: List[ErrorDetail] = []
 
@@ -231,7 +251,9 @@ def discover_best_fundamentals(
         for future in as_completed(future_to_symbol):
             symbol = future_to_symbol[future]
             try:
-                candidates.append(future.result())
+                candidate = future.result()
+                if _is_discoverable_stock_symbol(candidate.symbol):
+                    candidates.append(candidate)
             except Exception as exc:
                 errors.append(ErrorDetail(symbol=symbol, error=str(exc)))
 
@@ -270,6 +292,7 @@ def discover_best_fundamentals(
         "error_count": len(errors),
         "top_n": top_n,
         "exchange": exchange,
+        "excluded_non_tradable_symbols": sorted(_NON_TRADABLE_DISCOVERY_SYMBOLS),
         "growth_v2_fields": [
             "revenue_3y_cagr",
             "eps_growth",
