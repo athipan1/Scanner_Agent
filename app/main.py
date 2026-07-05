@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from typing import Any, Dict, List, Optional, Tuple
 from app.services.scanner import scan_market
 from app.services.long_term_scanner import scan_long_term
@@ -11,6 +11,9 @@ from app.models import (
     ScannerResult,
     CandidateResult,
     StandardAgentResponse,
+    SCANNER_AGENT_TYPE,
+    SCANNER_AGENT_VERSION,
+    SCHEMA_VERSION,
 )
 from app.config import settings
 import logging
@@ -21,7 +24,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Scanner_Agent",
     description="A market scanner agent for a multi-agent trading system.",
-    version="1.0.0"
+    version=SCANNER_AGENT_VERSION,
 )
 
 
@@ -33,6 +36,10 @@ def _trading_mode() -> str:
     return str(settings.TRADING_MODE or "PAPER").upper()
 
 
+def _dev_fallback_allowed() -> bool:
+    return bool(settings.SCANNER_DEV_MODE) and _trading_mode() != "LIVE"
+
+
 def _scanner_runtime_metadata() -> Dict[str, Any]:
     return {
         "trading_mode": _trading_mode(),
@@ -41,8 +48,18 @@ def _scanner_runtime_metadata() -> Dict[str, Any]:
     }
 
 
-def _dev_fallback_allowed() -> bool:
-    return bool(settings.SCANNER_DEV_MODE) and _trading_mode() != "LIVE"
+def build_response(status: str, data=None, error=None, metadata=None, correlation_id: Optional[str] = None, confidence_score=None):
+    return StandardAgentResponse(
+        status=status,
+        agent_type=SCANNER_AGENT_TYPE,
+        version=SCANNER_AGENT_VERSION,
+        schema_version=SCHEMA_VERSION,
+        correlation_id=correlation_id,
+        data=data,
+        metadata=metadata or {},
+        error=error,
+        confidence_score=confidence_score,
+    )
 
 
 def _raise_live_dev_fallback_forbidden(scan_type: str):
@@ -177,21 +194,58 @@ def _error_dict(errors: Any) -> Optional[Dict[str, str]]:
     return result or None
 
 
-@app.get("/health")
+@app.get("/version", response_model=StandardAgentResponse[dict])
+def version_check():
+    return build_response(
+        status="success",
+        data={
+            "agent_type": SCANNER_AGENT_TYPE,
+            "version": SCANNER_AGENT_VERSION,
+            "schema_version": SCHEMA_VERSION,
+            "api_contract": "multi-agent-trading-api-contract",
+        },
+        metadata={"required_operational_endpoints": ["/health", "/ready", "/version"]},
+    )
+
+
+@app.get("/ready", response_model=StandardAgentResponse[dict])
+def readiness_check():
+    live_dev_fallback_violation = settings.SCANNER_DEV_MODE and _trading_mode() == "LIVE"
+    ready = not live_dev_fallback_violation
+    return build_response(
+        status="success" if ready else "error",
+        data={
+            "ready": ready,
+            "trading_mode": _trading_mode(),
+            "scanner_dev_mode": settings.SCANNER_DEV_MODE,
+            "dev_fallback_allowed": _dev_fallback_allowed(),
+            "live_dev_fallback_violation": live_dev_fallback_violation,
+            "technical_scan_endpoint": "/scan",
+            "fundamental_scan_endpoint": "/scan/fundamental",
+            "best_fundamentals_endpoint": "/discover-best-fundamentals",
+        },
+        metadata={"contract_source": "scanner-agent-runtime-contract"},
+        error=None if ready else {
+            "code": "SCANNER_AGENT_NOT_READY",
+            "message": "Scanner dev fallback is forbidden in LIVE mode.",
+            "retryable": False,
+        },
+        confidence_score=1.0 if ready else 0.0,
+    )
+
+
+@app.get("/health", response_model=StandardAgentResponse[dict])
 def health_check():
-    return {
-        "status": "success",
-        "agent_type": "scanner",
-        "version": "1.0.0",
-        "timestamp": _utc_timestamp(),
-        "data": {"message": "healthy"},
-        "metadata": _scanner_runtime_metadata(),
-        "error": None,
-    }
+    return build_response(
+        status="success",
+        data={"message": "healthy"},
+        metadata=_scanner_runtime_metadata(),
+    )
 
 
 @app.post("/discover-best-fundamentals", response_model=StandardAgentResponse)
-def discover_best_fundamental_stocks(request: BestFundamentalsRequest):
+def discover_best_fundamental_stocks(request: BestFundamentalsRequest, req: Request):
+    correlation_id = req.headers.get("X-Correlation-ID")
     if request.universe.upper() != "NASDAQ_SP500":
         raise HTTPException(status_code=400, detail="Only NASDAQ_SP500 universe is currently supported.")
 
@@ -208,8 +262,7 @@ def discover_best_fundamental_stocks(request: BestFundamentalsRequest):
 
     error_dict = _error_dict(errors) or {}
     status = "success" if candidates else "error"
-    return StandardAgentResponse(
-        agent_type="scanner",
+    return build_response(
         status=status,
         data=ScannerContractResult(
             scan_type="best_fundamentals",
@@ -219,11 +272,14 @@ def discover_best_fundamental_stocks(request: BestFundamentalsRequest):
             errors=error_dict,
         ),
         error=error_dict if not candidates else None,
+        metadata=_scanner_runtime_metadata(),
+        correlation_id=correlation_id,
     )
 
 
 @app.post("/scan", response_model=StandardAgentResponse)
-def scan_stocks(request: ScanRequest):
+def scan_stocks(request: ScanRequest, req: Request):
+    correlation_id = req.headers.get("X-Correlation-ID")
     symbols_to_scan = request.symbols if request.symbols else settings.DEFAULT_SYMBOLS
     screener, exchange = _normalize_market_inputs(request.screener, request.exchange)
 
@@ -265,8 +321,7 @@ def scan_stocks(request: ScanRequest):
             error_dict["watchlist_fallback"] = "No BUY candidates passed strict scanner thresholds; returned real market watchlist candidates."
 
     status = "success" if candidates else "error" if error_dict else "success"
-    return StandardAgentResponse(
-        agent_type="scanner",
+    return build_response(
         status=status,
         data=ScannerResult(
             scan_type="technical",
@@ -274,11 +329,14 @@ def scan_stocks(request: ScanRequest):
             candidates=candidates,
         ),
         error=error_dict,
+        metadata=_scanner_runtime_metadata(),
+        correlation_id=correlation_id,
     )
 
 
 @app.post("/scan/fundamental", response_model=StandardAgentResponse)
-def scan_fundamental_stocks(request: ScanRequest):
+def scan_fundamental_stocks(request: ScanRequest, req: Request):
+    correlation_id = req.headers.get("X-Correlation-ID")
     symbols_to_scan = request.symbols if request.symbols else settings.DEFAULT_SYMBOLS
     _, exchange = _normalize_market_inputs(request.screener, request.exchange)
 
@@ -319,8 +377,7 @@ def scan_fundamental_stocks(request: ScanRequest):
             error_dict["watchlist_fallback"] = "No fundamental candidates passed strict scanner requirements; returned real market watchlist candidates."
 
     status = "success" if candidates else "error" if error_dict else "success"
-    return StandardAgentResponse(
-        agent_type="scanner",
+    return build_response(
         status=status,
         data=ScannerResult(
             scan_type="fundamental",
@@ -328,4 +385,6 @@ def scan_fundamental_stocks(request: ScanRequest):
             candidates=candidates,
         ),
         error=error_dict,
+        metadata=_scanner_runtime_metadata(),
+        correlation_id=correlation_id,
     )
