@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Generic, TypeVar
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
+
+SCANNER_AGENT_TYPE = "scanner"
+SCANNER_AGENT_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.0"
 
 
 def utc_timestamp() -> str:
@@ -79,12 +83,23 @@ class ScannerResult(BaseModel):
 
 class StandardAgentResponse(GenericModel, Generic[T]):
     status: str
-    agent_type: str = "scanner"
-    version: str = "1.0.0"
+    agent_type: str = SCANNER_AGENT_TYPE
+    version: str = SCANNER_AGENT_VERSION
+    schema_version: str = SCHEMA_VERSION
     timestamp: str = Field(default_factory=utc_timestamp)
+    correlation_id: Optional[str] = None
     data: Optional[T] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[Any] = None
     confidence_score: Optional[float] = None
+
+    @field_validator("schema_version")
+    @classmethod
+    def schema_version_must_be_semantic(cls, value: str) -> str:
+        parts = value.split(".")
+        if not all(part.isdigit() for part in parts):
+            raise ValueError('Schema version must be in semantic format (e.g., "1.0")')
+        return value
 
 
 # Internal models for Fundamental analysis results
