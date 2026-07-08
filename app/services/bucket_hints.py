@@ -181,7 +181,7 @@ def build_strategy_bucket_hints(
         if cheap_pb_bonus:
             _append(evidence, "value_rebound", f"pb_ratio:{pb:.4f}")
 
-    growth_bonus = min(0.15, strongest_growth * 0.20)
+    growth_bonus = min(0.18, strongest_growth * 0.22)
     if strongest_growth > 0:
         _append(evidence, "news_momentum", f"strongest_growth_metric:{strongest_growth:.4f}")
 
