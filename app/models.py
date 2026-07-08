@@ -1,13 +1,16 @@
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Generic, TypeVar
+from typing import List, Optional, Dict, Any, Generic, TypeVar, Literal
 from pydantic import BaseModel, Field, field_validator
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
 
 SCANNER_AGENT_TYPE = "scanner"
-SCANNER_AGENT_VERSION = "1.0.0"
+SCANNER_AGENT_VERSION = "1.1.0"
 SCHEMA_VERSION = "1.0"
+
+StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum"]
+BucketHintStatus = Literal["suggested", "review", "conflict", "insufficient_evidence"]
 
 
 def utc_timestamp() -> str:
@@ -39,10 +42,29 @@ class ErrorDetail(BaseModel):
     error: str
 
 
+class StrategyBucketHintContract(BaseModel):
+    """Non-binding Scanner evidence consumed by Manager_Agent."""
+
+    bucket_hint_version: str = "scanner-bucket-hints-v2"
+    bucket_hint_status: BucketHintStatus
+    primary_strategy_bucket_hint: Optional[StrategyBucket] = None
+    primary_strategy_bucket_confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    strategy_bucket_confidence: float = Field(ge=0, le=1)
+    strategy_bucket_hints: List[StrategyBucket] = Field(default_factory=list)
+    bucket_hint_scores: Dict[str, float] = Field(default_factory=dict)
+    bucket_hint_margin: float = 0.0
+    bucket_hint_evidence: Dict[str, List[str]] = Field(default_factory=dict)
+    bucket_hint_reasons: List[str] = Field(default_factory=list)
+    bucket_hint_is_binding: bool = False
+    manager_decision_required: bool = True
+    controlled_strategy_buckets: List[StrategyBucket] = Field(default_factory=lambda: ["core_dividend", "value_rebound", "news_momentum"])
+
+
 class CandidateResult(BaseModel):
     symbol: str
     confidence_score: Optional[float] = None
     recommendation: str = "hold"
+    bucket_hint: Optional[StrategyBucketHintContract] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -64,6 +86,7 @@ class ScannerCandidateContract(BaseModel):
     tags: List[str] = Field(default_factory=list)
     reasons: List[str] = Field(default_factory=list)
     raw_scores: Dict[str, Any] = Field(default_factory=dict)
+    bucket_hint: Optional[StrategyBucketHintContract] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
