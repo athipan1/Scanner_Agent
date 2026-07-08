@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Generic, TypeVar, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
@@ -67,6 +67,21 @@ class CandidateResult(BaseModel):
     bucket_hint: Optional[StrategyBucketHintContract] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def populate_bucket_hint(self):
+        from app.services.candidate_bucket_context import enrich_candidate_metadata_with_bucket_hints
+
+        candidate_context = {
+            "symbol": self.symbol,
+            "confidence_score": self.confidence_score,
+            "recommendation": self.recommendation,
+            **self.metadata,
+        }
+        enriched = enrich_candidate_metadata_with_bucket_hints(candidate_context, self.metadata)
+        self.metadata = enriched
+        self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
+        return self
+
 
 class ScannerCandidateContract(BaseModel):
     """
@@ -88,6 +103,24 @@ class ScannerCandidateContract(BaseModel):
     raw_scores: Dict[str, Any] = Field(default_factory=dict)
     bucket_hint: Optional[StrategyBucketHintContract] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def populate_bucket_hint(self):
+        from app.services.candidate_bucket_context import enrich_candidate_metadata_with_bucket_hints
+
+        candidate_context = {
+            "symbol": self.symbol,
+            "candidate_score": self.candidate_score,
+            "recommendation": self.recommendation_hint,
+            **self.raw_scores,
+        }
+        enriched = enrich_candidate_metadata_with_bucket_hints(candidate_context, self.metadata)
+        self.metadata = enriched
+        self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
+        for tag in enriched.get("bucket_hint_tags") or []:
+            if tag not in self.tags:
+                self.tags.append(tag)
+        return self
 
 
 class ScannerContractResult(BaseModel):
