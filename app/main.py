@@ -181,7 +181,7 @@ def _market_watchlist_candidates(
     scan_type: str,
     exchange: str,
 ) -> List[CandidateResult]:
-    """Build a non-dev watchlist from live yfinance market metadata."""
+    """Builds a non-dev fallback watchlist from live yfinance metadata."""
     candidates: List[CandidateResult] = []
     try:
         import yfinance as yf
@@ -315,10 +315,7 @@ def health_check():
     )
 
 
-@app.post(
-    "/discover-best-fundamentals",
-    response_model=StandardAgentResponse,
-)
+@app.post("/discover-best-fundamentals", response_model=StandardAgentResponse)
 def discover_best_fundamental_stocks(
     request: BestFundamentalsRequest,
     req: Request,
@@ -339,112 +336,183 @@ def discover_best_fundamental_stocks(
         )
     except Exception as exc:
         logger.exception("Best fundamentals discovery failed")
-        raise HTTPException(
-            status_code=502,
-            detail=f"Best fundamentals discovery failed: {exc}",
-        ) from exc
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    contract_candidates = []
-    for candidate in candidates:
-        if hasattr(candidate, "model_dump"):
-            contract_candidates.append(candidate.model_dump(mode="json"))
-        elif isinstance(candidate, dict):
-            contract_candidates.append(candidate)
-
-    result = ScannerContractResult(
-        scan_type="best_fundamentals_discovery",
-        count=len(contract_candidates),
-        candidates=contract_candidates,
-        metadata=metadata or {},
-        errors=_error_dict(errors) or {},
-    )
+    error_dict = _error_dict(errors) or {}
+    status = "success" if candidates else "error"
     return build_response(
-        status="success",
-        data=result,
-        correlation_id=correlation_id,
-        metadata=_scanner_runtime_metadata(),
-        confidence_score=(
-            max(
-                (
-                    float(candidate.candidate_score or 0.0)
-                    for candidate in result.candidates
-                ),
-                default=0.0,
-            )
+        status=status,
+        data=ScannerContractResult(
+            scan_type="best_fundamentals",
+            count=len(candidates),
+            candidates=candidates,
+            metadata=metadata,
+            errors=error_dict,
         ),
+        error=error_dict if not candidates else None,
+        metadata=_scanner_runtime_metadata(),
+        correlation_id=correlation_id,
     )
 
 
-@app.post("/scan", response_model=StandardAgentResponse[ScannerResult])
-def scan(request: ScanRequest, req: Request):
+@app.post("/scan", response_model=StandardAgentResponse)
+def scan_stocks(request: ScanRequest, req: Request):
     correlation_id = req.headers.get("X-Correlation-ID")
+    symbols_to_scan = (
+        request.symbols if request.symbols else settings.DEFAULT_SYMBOLS
+    )
     screener, exchange = _normalize_market_inputs(
         request.screener,
         request.exchange,
     )
-    symbols = request.symbols or []
-    candidates = scan_market(
-        symbols=symbols,
-        screener=screener,
-        exchange=exchange,
-    )
-    normalized = [
+
+    if not symbols_to_scan:
+        raise HTTPException(
+            status_code=400,
+            detail="Symbol list cannot be empty if provided.",
+        )
+
+    try:
+        candidates_raw, errors = scan_market(
+            symbols=symbols_to_scan,
+            screener=screener,
+            exchange=exchange,
+        )
+    except Exception:
+        logger.exception("Technical scan failed")
+        if settings.SCANNER_DEV_MODE and _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("technical")
+        if not _dev_fallback_allowed():
+            raise
+        candidates_raw, errors = [], []
+
+    candidates = [
         candidate
-        for item in candidates
-        if (candidate := _normalize_candidate(item)) is not None
+        for candidate in (
+            _normalize_candidate(c, default_recommendation="hold")
+            for c in (candidates_raw or [])
+        )
+        if candidate is not None
     ]
-    if not normalized and symbols:
-        normalized = _market_watchlist_candidates(
-            symbols,
+
+    error_dict = _error_dict(errors)
+    if not candidates and settings.SCANNER_DEV_MODE:
+        if _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("technical")
+        candidates = _mock_candidates(
+            symbols_to_scan,
+            scan_type="technical",
+        )
+        error_dict = error_dict or {
+            "dev_fallback": (
+                "Scanner returned no candidates; dev fallback candidates "
+                "were generated."
+            )
+        }
+
+    if not candidates and not settings.SCANNER_DEV_MODE:
+        candidates = _market_watchlist_candidates(
+            symbols_to_scan,
             "technical",
             exchange,
         )
+        if candidates:
+            error_dict = error_dict or {}
+            error_dict["watchlist_fallback"] = (
+                "No BUY candidates passed strict scanner thresholds; "
+                "returned real market watchlist candidates."
+            )
+
+    status = "success" if candidates else "error" if error_dict else "success"
     return build_response(
-        status="success",
+        status=status,
         data=ScannerResult(
             scan_type="technical",
-            count=len(normalized),
-            candidates=normalized,
+            count=len(candidates),
+            candidates=candidates,
         ),
-        correlation_id=correlation_id,
+        error=error_dict,
         metadata=_scanner_runtime_metadata(),
+        correlation_id=correlation_id,
     )
 
 
-@app.post(
-    "/scan/fundamental",
-    response_model=StandardAgentResponse[ScannerResult],
-)
-def scan_fundamental(request: ScanRequest, req: Request):
+@app.post("/scan/fundamental", response_model=StandardAgentResponse)
+def scan_fundamental_stocks(request: ScanRequest, req: Request):
     correlation_id = req.headers.get("X-Correlation-ID")
-    screener, exchange = _normalize_market_inputs(
+    symbols_to_scan = (
+        request.symbols if request.symbols else settings.DEFAULT_SYMBOLS
+    )
+    _, exchange = _normalize_market_inputs(
         request.screener,
         request.exchange,
     )
-    symbols = request.symbols or []
-    candidates = scan_long_term(
-        symbols=symbols,
-        screener=screener,
-        exchange=exchange,
-    )
-    normalized = [
+
+    if not symbols_to_scan:
+        raise HTTPException(
+            status_code=400,
+            detail="Symbol list cannot be empty if provided.",
+        )
+
+    try:
+        candidates_raw, errors = scan_long_term(
+            symbols=symbols_to_scan,
+            exchange=exchange,
+        )
+    except Exception:
+        logger.exception("Fundamental scan failed")
+        if settings.SCANNER_DEV_MODE and _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("fundamental")
+        if not _dev_fallback_allowed():
+            raise
+        candidates_raw, errors = [], []
+
+    candidates = [
         candidate
-        for item in candidates
-        if (candidate := _normalize_candidate(item, "WATCHLIST")) is not None
+        for candidate in (
+            _normalize_candidate(c, default_recommendation="hold")
+            for c in (candidates_raw or [])
+        )
+        if candidate is not None
     ]
-    if not normalized and symbols:
-        normalized = _market_watchlist_candidates(
-            symbols,
+
+    error_dict = _error_dict(errors)
+    if not candidates and settings.SCANNER_DEV_MODE:
+        if _trading_mode() == "LIVE":
+            _raise_live_dev_fallback_forbidden("fundamental")
+        candidates = _mock_candidates(
+            symbols_to_scan,
+            scan_type="fundamental",
+        )
+        error_dict = error_dict or {
+            "dev_fallback": (
+                "Scanner returned no candidates; dev fallback candidates "
+                "were generated."
+            )
+        }
+
+    if not candidates and not settings.SCANNER_DEV_MODE:
+        candidates = _market_watchlist_candidates(
+            symbols_to_scan,
             "fundamental",
             exchange,
         )
+        if candidates:
+            error_dict = error_dict or {}
+            error_dict["watchlist_fallback"] = (
+                "No fundamental candidates passed strict scanner "
+                "requirements; returned real market watchlist candidates."
+            )
+
+    status = "success" if candidates else "error" if error_dict else "success"
     return build_response(
-        status="success",
+        status=status,
         data=ScannerResult(
             scan_type="fundamental",
-            count=len(normalized),
-            candidates=normalized,
+            count=len(candidates),
+            candidates=candidates,
         ),
-        correlation_id=correlation_id,
+        error=error_dict,
         metadata=_scanner_runtime_metadata(),
+        correlation_id=correlation_id,
     )
