@@ -33,8 +33,24 @@ jobs:
         run: python -c "from app.main import app; print(app.title)"
 
       - name: Run scanner tests
+        id: pytest
+        continue-on-error: true
         run: |
           python -m pytest -q --tb=short --disable-warnings \
             app/test_main.py \
             app/test_fundamental_score.py \
-            tests
+            tests > pytest-results.txt 2>&1
+
+      - name: Upload pytest results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-pytest-results
+          path: pytest-results.txt
+          if-no-files-found: error
+
+      - name: Fail when pytest fails
+        if: steps.pytest.outcome == 'failure'
+        run: |
+          cat pytest-results.txt
+          exit 1

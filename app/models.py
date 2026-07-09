@@ -6,7 +6,8 @@ from pydantic.generics import GenericModel
 T = TypeVar("T")
 
 SCANNER_AGENT_TYPE = "scanner"
-SCANNER_AGENT_VERSION = "1.1.0"
+SCANNER_AGENT_VERSION = "1.2.0"
+SCANNER_SERVICE_VERSION = "1.2.0"
 SCHEMA_VERSION = "1.0"
 
 StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum"]
@@ -46,6 +47,7 @@ class StrategyBucketHintContract(BaseModel):
     """Non-binding Scanner evidence consumed by Manager_Agent."""
 
     bucket_hint_version: str = "scanner-bucket-hints-v2"
+    bucket_hint_policy_version: str = "scanner-bucket-hint-policy-v3"
     bucket_hint_status: BucketHintStatus
     primary_strategy_bucket_hint: Optional[StrategyBucket] = None
     primary_strategy_bucket_confidence: Optional[float] = Field(default=None, ge=0, le=1)
@@ -54,7 +56,11 @@ class StrategyBucketHintContract(BaseModel):
     bucket_hint_scores: Dict[str, float] = Field(default_factory=dict)
     bucket_hint_margin: float = 0.0
     bucket_hint_evidence: Dict[str, List[str]] = Field(default_factory=dict)
+    bucket_hint_defining_evidence: Dict[str, List[str]] = Field(default_factory=dict)
+    bucket_hint_supporting_evidence: Dict[str, List[str]] = Field(default_factory=dict)
+    bucket_hint_dominance_rule: Optional[str] = None
     bucket_hint_reasons: List[str] = Field(default_factory=list)
+    bucket_hint_tags: List[str] = Field(default_factory=list)
     bucket_hint_is_binding: bool = False
     manager_decision_required: bool = True
     controlled_strategy_buckets: List[StrategyBucket] = Field(default_factory=lambda: ["core_dividend", "value_rebound", "news_momentum"])
@@ -117,9 +123,9 @@ class ScannerCandidateContract(BaseModel):
         enriched = enrich_candidate_metadata_with_bucket_hints(candidate_context, self.metadata)
         self.metadata = enriched
         self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
-        for tag in enriched.get("bucket_hint_tags") or []:
-            if tag not in self.tags:
-                self.tags.append(tag)
+        # Typed bucket hints stay in ``bucket_hint``/metadata. They must never be
+        # copied into generic tags because Manager interprets human tags as
+        # independent evidence and would double-count Scanner's own hint.
         return self
 
 

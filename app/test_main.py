@@ -1,6 +1,9 @@
-from fastapi.testclient import TestClient
-from app.main import app
 from datetime import datetime
+
+from fastapi.testclient import TestClient
+
+from app.main import app
+
 
 client = TestClient(app)
 
@@ -11,11 +14,15 @@ def test_health_check():
     json_data = response.json()
     assert json_data["status"] == "success"
     assert json_data["agent_type"] == "scanner"
-    assert json_data["version"] == "1.1.0"
+    assert json_data["version"] == "1.2.0"
     assert "timestamp" in json_data
     ts = json_data["timestamp"].replace("Z", "+00:00")
     datetime.fromisoformat(ts)
     assert json_data["data"] == {"message": "healthy"}
+    assert json_data["metadata"]["bucket_hint_policy_version"] == (
+        "scanner-bucket-hint-policy-v3"
+    )
+    assert json_data["metadata"]["generic_tag_bucket_hints"] is False
     assert "error" in json_data
 
 
@@ -39,10 +46,16 @@ def test_scan_fundamental_endpoint_no_symbols():
         assert "bucket_hint" in candidate
         assert candidate["bucket_hint"]["bucket_hint_is_binding"] is False
         assert candidate["bucket_hint"]["manager_decision_required"] is True
+        assert candidate["bucket_hint"]["bucket_hint_policy_version"] == (
+            "scanner-bucket-hint-policy-v3"
+        )
 
 
 def test_scan_fundamental_endpoint_with_symbols():
-    response = client.post("/scan/fundamental", json={"symbols": ["AAPL", "GOOG"], "exchange": "NASDAQ"})
+    response = client.post(
+        "/scan/fundamental",
+        json={"symbols": ["AAPL", "GOOG"], "exchange": "NASDAQ"},
+    )
     assert response.status_code == 200
     response_json = response.json()
     assert response_json["status"] in ["success", "error"]
@@ -57,7 +70,14 @@ def test_scan_fundamental_endpoint_with_symbols():
 
 
 def test_scan_endpoint():
-    response = client.post("/scan", json={"symbols": ["AAPL", "MSFT"], "screener": "america", "exchange": "NASDAQ"})
+    response = client.post(
+        "/scan",
+        json={
+            "symbols": ["AAPL", "MSFT"],
+            "screener": "america",
+            "exchange": "NASDAQ",
+        },
+    )
     assert response.status_code == 200
     response_json = response.json()
     assert "agent_type" in response_json

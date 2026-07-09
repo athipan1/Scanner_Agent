@@ -26,10 +26,17 @@ def test_technical_candidate_gets_news_momentum_hint_from_technical_evidence():
 
     assert candidate.bucket_hint is not None
     assert candidate.bucket_hint.bucket_hint_status == "suggested"
-    assert candidate.bucket_hint.primary_strategy_bucket_hint == "news_momentum"
-    assert candidate.metadata["primary_strategy_bucket_hint"] == "news_momentum"
+    assert candidate.bucket_hint.primary_strategy_bucket_hint == (
+        "news_momentum"
+    )
+    assert candidate.metadata["primary_strategy_bucket_hint"] == (
+        "news_momentum"
+    )
     assert candidate.metadata["primary_strategy_bucket_confidence"] >= 0.65
     assert candidate.metadata["bucket_hint_is_binding"] is False
+    assert candidate.bucket_hint.bucket_hint_policy_version == (
+        "scanner-bucket-hint-policy-v3"
+    )
 
 
 def test_fundamental_candidate_gets_value_hint_from_nested_metrics():
@@ -38,18 +45,34 @@ def test_fundamental_candidate_gets_value_hint_from_nested_metrics():
         confidence_score=0.82,
         recommendation="A",
         metadata={
-            "quality": {"score": 60, "free_cash_flow": 500000, "debt_to_equity": 1.4},
-            "growth": {"score": 30, "revenue_cagr": 0.08, "eps_growth": 0.05},
-            "valuation": {"score": 92, "pe_ratio": 11, "pb_ratio": 1.1},
+            "quality": {
+                "score": 60,
+                "free_cash_flow": 500000,
+                "debt_to_equity": 1.4,
+            },
+            "growth": {
+                "score": 30,
+                "revenue_cagr": 0.08,
+                "eps_growth": 0.05,
+            },
+            "valuation": {
+                "score": 92,
+                "pe_ratio": 11,
+                "pb_ratio": 1.1,
+            },
             "grade": "A",
         },
     )
 
-    assert candidate.bucket_hint.primary_strategy_bucket_hint == "value_rebound"
+    assert candidate.bucket_hint.primary_strategy_bucket_hint == (
+        "value_rebound"
+    )
     assert candidate.metadata["bucket_hint_status"] == "suggested"
     assert any(
         reason.startswith("pe_ratio:")
-        for reason in candidate.metadata["bucket_hint_evidence"]["value_rebound"]
+        for reason in candidate.metadata[
+            "bucket_hint_defining_evidence"
+        ]["value_rebound"]
     )
 
 
@@ -66,16 +89,19 @@ def test_watchlist_candidate_abstains_instead_of_manufacturing_bucket():
         },
     )
 
-    assert candidate.bucket_hint.bucket_hint_status == "insufficient_evidence"
+    assert candidate.bucket_hint.bucket_hint_status == (
+        "insufficient_evidence"
+    )
     assert candidate.bucket_hint.primary_strategy_bucket_hint is None
     assert candidate.metadata["strategy_bucket_hints"] == []
 
 
-def test_scanner_contract_mirrors_hint_into_metadata_and_tags():
+def test_scanner_contract_mirrors_typed_hint_without_polluting_tags():
     candidate = ScannerCandidateContract(
         symbol="CORE",
         candidate_score=0.80,
         recommendation_hint="FUNDAMENTAL_TOP_10",
+        tags=["fundamental", "quality"],
         raw_scores={
             "quality_score": 92,
             "valuation_score": 45,
@@ -87,8 +113,20 @@ def test_scanner_contract_mirrors_hint_into_metadata_and_tags():
         metadata={"sector": "Consumer Defensive"},
     )
 
-    assert candidate.bucket_hint.primary_strategy_bucket_hint == "core_dividend"
-    assert candidate.metadata["primary_strategy_bucket_hint"] == "core_dividend"
-    assert candidate.metadata["bucket_hint_version"] == "scanner-bucket-hints-v2"
-    assert "bucket-hint:core_dividend" in candidate.tags
+    assert candidate.bucket_hint.primary_strategy_bucket_hint == (
+        "core_dividend"
+    )
+    assert candidate.metadata["primary_strategy_bucket_hint"] == (
+        "core_dividend"
+    )
+    assert candidate.metadata["bucket_hint_version"] == (
+        "scanner-bucket-hints-v2"
+    )
+    assert candidate.metadata["bucket_hint_policy_version"] == (
+        "scanner-bucket-hint-policy-v3"
+    )
+    assert candidate.tags == ["fundamental", "quality"]
+    assert "bucket-hint:core_dividend" in candidate.metadata[
+        "bucket_hint_tags"
+    ]
     assert candidate.bucket_hint.manager_decision_required is True
