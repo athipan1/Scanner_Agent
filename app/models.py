@@ -1,13 +1,16 @@
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Generic, TypeVar
-from pydantic import BaseModel, Field, field_validator
+from typing import List, Optional, Dict, Any, Generic, TypeVar, Literal
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
 
 SCANNER_AGENT_TYPE = "scanner"
-SCANNER_AGENT_VERSION = "1.0.0"
+SCANNER_AGENT_VERSION = "1.1.0"
 SCHEMA_VERSION = "1.0"
+
+StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum"]
+BucketHintStatus = Literal["suggested", "review", "conflict", "insufficient_evidence"]
 
 
 def utc_timestamp() -> str:
@@ -39,11 +42,45 @@ class ErrorDetail(BaseModel):
     error: str
 
 
+class StrategyBucketHintContract(BaseModel):
+    """Non-binding Scanner evidence consumed by Manager_Agent."""
+
+    bucket_hint_version: str = "scanner-bucket-hints-v2"
+    bucket_hint_status: BucketHintStatus
+    primary_strategy_bucket_hint: Optional[StrategyBucket] = None
+    primary_strategy_bucket_confidence: Optional[float] = Field(default=None, ge=0, le=1)
+    strategy_bucket_confidence: float = Field(ge=0, le=1)
+    strategy_bucket_hints: List[StrategyBucket] = Field(default_factory=list)
+    bucket_hint_scores: Dict[str, float] = Field(default_factory=dict)
+    bucket_hint_margin: float = 0.0
+    bucket_hint_evidence: Dict[str, List[str]] = Field(default_factory=dict)
+    bucket_hint_reasons: List[str] = Field(default_factory=list)
+    bucket_hint_is_binding: bool = False
+    manager_decision_required: bool = True
+    controlled_strategy_buckets: List[StrategyBucket] = Field(default_factory=lambda: ["core_dividend", "value_rebound", "news_momentum"])
+
+
 class CandidateResult(BaseModel):
     symbol: str
     confidence_score: Optional[float] = None
     recommendation: str = "hold"
+    bucket_hint: Optional[StrategyBucketHintContract] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def populate_bucket_hint(self):
+        from app.services.candidate_bucket_context import enrich_candidate_metadata_with_bucket_hints
+
+        candidate_context = {
+            "symbol": self.symbol,
+            "confidence_score": self.confidence_score,
+            "recommendation": self.recommendation,
+            **self.metadata,
+        }
+        enriched = enrich_candidate_metadata_with_bucket_hints(candidate_context, self.metadata)
+        self.metadata = enriched
+        self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
+        return self
 
 
 class ScannerCandidateContract(BaseModel):
@@ -64,7 +101,26 @@ class ScannerCandidateContract(BaseModel):
     tags: List[str] = Field(default_factory=list)
     reasons: List[str] = Field(default_factory=list)
     raw_scores: Dict[str, Any] = Field(default_factory=dict)
+    bucket_hint: Optional[StrategyBucketHintContract] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def populate_bucket_hint(self):
+        from app.services.candidate_bucket_context import enrich_candidate_metadata_with_bucket_hints
+
+        candidate_context = {
+            "symbol": self.symbol,
+            "candidate_score": self.candidate_score,
+            "recommendation": self.recommendation_hint,
+            **self.raw_scores,
+        }
+        enriched = enrich_candidate_metadata_with_bucket_hints(candidate_context, self.metadata)
+        self.metadata = enriched
+        self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
+        for tag in enriched.get("bucket_hint_tags") or []:
+            if tag not in self.tags:
+                self.tags.append(tag)
+        return self
 
 
 class ScannerContractResult(BaseModel):
