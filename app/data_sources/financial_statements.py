@@ -1,9 +1,14 @@
-import yfinance as yf
-from typing import Optional, Dict, Any
 import logging
+from typing import Any, Callable, Dict, Optional
+
+import yfinance as yf
+
 from app.utils.symbol_mapper import map_symbol_for_yfinance
 
 logger = logging.getLogger(__name__)
+
+
+StatementLoader = Callable[[], Any]
 
 
 def _is_empty(statement) -> bool:
@@ -13,8 +18,20 @@ def _is_empty(statement) -> bool:
         return True
 
 
-def _first_non_empty(*statements):
-    for statement in statements:
+def _first_non_empty_lazy(*loaders: StatementLoader):
+    """Run provider fallbacks one at a time and stop after the first success.
+
+    The previous implementation accepted already-evaluated values. Python therefore
+    executed every yfinance property and method before `_first_non_empty` could
+    choose one, producing a request storm for broad-universe discovery.
+    """
+
+    for loader in loaders:
+        try:
+            statement = loader()
+        except Exception as exc:
+            logger.debug("Optional yfinance statement loader failed: %s", exc)
+            continue
         if not _is_empty(statement):
             return statement
     return None
@@ -26,81 +43,73 @@ def _call_optional(stock, method_name: str, **kwargs):
         if callable(method):
             return method(**kwargs)
     except Exception as exc:
-        logger.debug(f"Optional yfinance call {method_name} failed: {exc}")
+        logger.debug("Optional yfinance call %s failed: %s", method_name, exc)
     return None
 
 
 def _get_annual_income_statement(stock):
-    return _first_non_empty(
-        getattr(stock, "income_stmt", None),
-        getattr(stock, "financials", None),
-        _call_optional(stock, "get_income_stmt", freq="yearly"),
-        _call_optional(stock, "get_financials", freq="yearly"),
-        _call_optional(stock, "get_income_stmt"),
-        _call_optional(stock, "get_financials"),
+    return _first_non_empty_lazy(
+        lambda: getattr(stock, "income_stmt", None),
+        lambda: getattr(stock, "financials", None),
+        lambda: _call_optional(stock, "get_income_stmt", freq="yearly"),
+        lambda: _call_optional(stock, "get_financials", freq="yearly"),
+        lambda: _call_optional(stock, "get_income_stmt"),
+        lambda: _call_optional(stock, "get_financials"),
     )
 
 
 def _get_annual_balance_sheet(stock):
-    return _first_non_empty(
-        getattr(stock, "balance_sheet", None),
-        getattr(stock, "balancesheet", None),
-        _call_optional(stock, "get_balance_sheet", freq="yearly"),
-        _call_optional(stock, "get_balancesheet", freq="yearly"),
-        _call_optional(stock, "get_balance_sheet"),
-        _call_optional(stock, "get_balancesheet"),
+    return _first_non_empty_lazy(
+        lambda: getattr(stock, "balance_sheet", None),
+        lambda: getattr(stock, "balancesheet", None),
+        lambda: _call_optional(stock, "get_balance_sheet", freq="yearly"),
+        lambda: _call_optional(stock, "get_balancesheet", freq="yearly"),
+        lambda: _call_optional(stock, "get_balance_sheet"),
+        lambda: _call_optional(stock, "get_balancesheet"),
     )
 
 
 def _get_annual_cash_flow(stock):
-    return _first_non_empty(
-        getattr(stock, "cashflow", None),
-        getattr(stock, "cash_flow", None),
-        _call_optional(stock, "get_cashflow", freq="yearly"),
-        _call_optional(stock, "get_cash_flow", freq="yearly"),
-        _call_optional(stock, "get_cashflow"),
-        _call_optional(stock, "get_cash_flow"),
+    return _first_non_empty_lazy(
+        lambda: getattr(stock, "cashflow", None),
+        lambda: getattr(stock, "cash_flow", None),
+        lambda: _call_optional(stock, "get_cashflow", freq="yearly"),
+        lambda: _call_optional(stock, "get_cash_flow", freq="yearly"),
+        lambda: _call_optional(stock, "get_cashflow"),
+        lambda: _call_optional(stock, "get_cash_flow"),
     )
 
 
 def _get_quarterly_income_statement(stock):
-    return _first_non_empty(
-        getattr(stock, "quarterly_income_stmt", None),
-        getattr(stock, "quarterly_financials", None),
-        _call_optional(stock, "get_income_stmt", freq="quarterly"),
-        _call_optional(stock, "get_financials", freq="quarterly"),
+    return _first_non_empty_lazy(
+        lambda: getattr(stock, "quarterly_income_stmt", None),
+        lambda: getattr(stock, "quarterly_financials", None),
+        lambda: _call_optional(stock, "get_income_stmt", freq="quarterly"),
+        lambda: _call_optional(stock, "get_financials", freq="quarterly"),
     )
 
 
 def _get_quarterly_balance_sheet(stock):
-    return _first_non_empty(
-        getattr(stock, "quarterly_balance_sheet", None),
-        getattr(stock, "quarterly_balancesheet", None),
-        _call_optional(stock, "get_balance_sheet", freq="quarterly"),
-        _call_optional(stock, "get_balancesheet", freq="quarterly"),
+    return _first_non_empty_lazy(
+        lambda: getattr(stock, "quarterly_balance_sheet", None),
+        lambda: getattr(stock, "quarterly_balancesheet", None),
+        lambda: _call_optional(stock, "get_balance_sheet", freq="quarterly"),
+        lambda: _call_optional(stock, "get_balancesheet", freq="quarterly"),
     )
 
 
 def _get_quarterly_cash_flow(stock):
-    return _first_non_empty(
-        getattr(stock, "quarterly_cashflow", None),
-        getattr(stock, "quarterly_cash_flow", None),
-        _call_optional(stock, "get_cashflow", freq="quarterly"),
-        _call_optional(stock, "get_cash_flow", freq="quarterly"),
+    return _first_non_empty_lazy(
+        lambda: getattr(stock, "quarterly_cashflow", None),
+        lambda: getattr(stock, "quarterly_cash_flow", None),
+        lambda: _call_optional(stock, "get_cashflow", freq="quarterly"),
+        lambda: _call_optional(stock, "get_cash_flow", freq="quarterly"),
     )
 
 
 def get_financials(symbol: str, exchange: str = "SET") -> Optional[Dict[str, Any]]:
-    """
-    Fetch financial statements for a given stock symbol using yfinance.
+    """Fetch annual and quarterly statements with provider-friendly fallbacks."""
 
-    The scanner needs two different timeframes:
-    - annual statements for 3Y revenue/EPS/FCF growth
-    - quarterly statements for QoQ momentum
-
-    Fallbacks are intentionally broad because yfinance may expose annual data
-    through different attributes depending on ticker/provider response.
-    """
     try:
         yf_symbol = map_symbol_for_yfinance(symbol, exchange)
         stock = yf.Ticker(yf_symbol)
@@ -120,30 +129,36 @@ def get_financials(symbol: str, exchange: str = "SET") -> Optional[Dict[str, Any
         has_quarterly_cash_flow = not _is_empty(quarterly_cash_flow)
         has_quarterly_balance = not _is_empty(quarterly_balance_sheet)
 
-        # Growth readiness should not fail just because balance sheet is missing.
+        # Growth readiness should not fail just because a balance sheet is absent.
         has_annual = has_annual_income or has_annual_cash_flow
         has_quarterly = has_quarterly_income or has_quarterly_cash_flow
 
         if not has_annual and not has_quarterly:
-            logger.warning(f"No annual or quarterly financial statements found for {symbol} ({yf_symbol})")
+            logger.warning(
+                "No annual or quarterly financial statements found for %s (%s)",
+                symbol,
+                yf_symbol,
+            )
             return None
 
         try:
-            info = stock.info
+            info = stock.info or {}
         except Exception as exc:
-            logger.debug(f"stock.info failed for {symbol} ({yf_symbol}): {exc}")
+            logger.debug("stock.info failed for %s (%s): %s", symbol, yf_symbol, exc)
             info = {}
 
         return {
-            # Backward compatibility: analyzers that read these keys now get annual data first.
-            "income_statement": annual_income_statement if has_annual_income else quarterly_income_statement,
-            "balance_sheet": annual_balance_sheet if has_annual_balance else quarterly_balance_sheet,
+            # Backward compatibility: analyzers read annual data first.
+            "income_statement": annual_income_statement
+            if has_annual_income
+            else quarterly_income_statement,
+            "balance_sheet": annual_balance_sheet
+            if has_annual_balance
+            else quarterly_balance_sheet,
             "cash_flow": annual_cash_flow if has_annual_cash_flow else quarterly_cash_flow,
-            # Explicit annual statements for 3Y growth.
             "annual_income_statement": annual_income_statement,
             "annual_balance_sheet": annual_balance_sheet,
             "annual_cash_flow": annual_cash_flow,
-            # Explicit quarterly statements for QoQ growth.
             "quarterly_income_statement": quarterly_income_statement,
             "quarterly_balance_sheet": quarterly_balance_sheet,
             "quarterly_cash_flow": quarterly_cash_flow,
@@ -156,8 +171,9 @@ def get_financials(symbol: str, exchange: str = "SET") -> Optional[Dict[str, Any
             "has_quarterly_cash_flow": has_quarterly_cash_flow,
             "has_quarterly_balance_sheet": has_quarterly_balance,
             "yf_symbol": yf_symbol,
+            # Reused by market_data so broad discovery does not call stock.info twice.
             "info": info,
         }
-    except Exception as e:
-        logger.error(f"Error fetching financial data for {symbol}: {e}")
+    except Exception as exc:
+        logger.error("Error fetching financial data for %s: %s", symbol, exc)
         return None
