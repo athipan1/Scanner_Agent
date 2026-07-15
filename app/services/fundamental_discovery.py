@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.analyzers import growth_analyzer, quality_analyzer, valuation_analyzer
@@ -26,29 +27,24 @@ _ERROR_SAMPLE_LIMIT = 5
 
 def _is_discoverable_stock_symbol(symbol: str) -> bool:
     symbol = str(symbol or "").strip().upper()
-    if not symbol:
+    if not symbol or symbol in _NON_TRADABLE_DISCOVERY_SYMBOLS:
         return False
-    if symbol in _NON_TRADABLE_DISCOVERY_SYMBOLS:
-        return False
-    if "/" in symbol or ":" in symbol:
-        return False
-    return True
+    return "/" not in symbol and ":" not in symbol
 
 
 def _safe_float(value: Any) -> Optional[float]:
     try:
-        if value is None:
+        if value is None or isinstance(value, bool):
             return None
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def _pct_to_decimal(value: Any) -> Optional[float]:
-    value = _safe_float(value)
-    if value is None:
-        return None
-    return value / 100.0
+    number = _safe_float(value)
+    return None if number is None else number / 100.0
 
 
 def _statement_shape(statement: Any) -> Optional[Dict[str, int]]:
@@ -107,7 +103,7 @@ def _initial_coverage(symbols: List[str]) -> List[str]:
 
 
 def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
-    """Build a broad, deterministic and non-alphabet-biased US universe."""
+    """Build a broad, deterministic, common-equity US universe."""
 
     live_sp500 = load_sp500_symbols()
     live_nasdaq100 = load_nasdaq100_symbols()
@@ -139,6 +135,7 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
             "listed_initial_coverage": _initial_coverage(nasdaq_listed),
             "selected_initial_coverage": _initial_coverage(symbols),
             "selection_order": "large_cap_priority_then_round_robin_initial",
+            "listed_security_filter": "common_equity_description_v1",
             "excluded_non_tradable_symbol_count": excluded_count,
             "selected_universe_count": len(symbols),
         },
@@ -148,7 +145,7 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
 def _metric_coverage(*groups: Dict[str, Any]) -> Dict[str, Any]:
     total = sum(len(group) for group in groups)
     available = sum(
-        value is not None
+        _safe_float(value) is not None
         for group in groups
         for value in group.values()
     )
@@ -159,6 +156,16 @@ def _metric_coverage(*groups: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _financial_provider_error(diagnostics: Dict[str, Any]) -> str:
+    errors = diagnostics.get("provider_errors") or []
+    if not errors:
+        return "financial provider error: unspecified provider failure"
+    first = errors[0] if isinstance(errors[0], dict) else {"error": str(errors[0])}
+    stage = first.get("stage") or "unknown_stage"
+    message = first.get("error") or "provider failure"
+    return f"financial provider error [{stage}]: {message}"
+
+
 def analyze_fundamental_candidate(
     symbol: str,
     exchange: str = "NASDAQ",
@@ -167,8 +174,12 @@ def analyze_fundamental_candidate(
     if not _is_discoverable_stock_symbol(symbol):
         raise ValueError(f"non-tradable discovery symbol: {symbol}")
 
-    financials = financial_statements.get_financials(symbol, exchange)
+    financials, financial_diagnostics = (
+        financial_statements.get_financials_with_diagnostics(symbol, exchange)
+    )
     if not financials:
+        if financial_diagnostics.get("status") == "provider_error":
+            raise ValueError(_financial_provider_error(financial_diagnostics))
         raise ValueError("missing financial statements")
 
     market = market_data.get_market_data(
@@ -278,7 +289,7 @@ def analyze_fundamental_candidate(
         "pe_ratio": _safe_float(valuation_metrics.get("pe_ratio")),
         "peg_ratio": _safe_float(valuation_metrics.get("peg_ratio")),
         "pb_ratio": _safe_float(valuation_metrics.get("pb_ratio")),
-        "market_cap": market.get("marketCap"),
+        "market_cap": _safe_float(market.get("marketCap")),
         "yf_symbol": annual_diagnostics.get("yf_symbol"),
         "has_annual_income_statement": annual_diagnostics.get(
             "has_annual_income_statement"
@@ -291,6 +302,10 @@ def analyze_fundamental_candidate(
         "industry": market.get("industry"),
         "growth_metrics": growth_metrics,
         "annual_diagnostics": annual_diagnostics,
+        "financial_provider_diagnostics": financials.get(
+            "financial_provider_diagnostics",
+            {},
+        ),
         "evidence_coverage": evidence_coverage,
         "valuation_metric_count": market.get("valuation_metric_count"),
         "valuation_data_complete": market.get("valuation_data_complete"),
@@ -333,6 +348,8 @@ def _classify_discovery_error(message: str) -> str:
         return "provider_rate_limited"
     if "timeout" in text or "timed out" in text:
         return "provider_timeout"
+    if "financial provider error" in text:
+        return "financial_provider_error"
     if "missing financial" in text:
         return "missing_financial_statements"
     if "missing market" in text or "current price" in text:
@@ -360,6 +377,9 @@ def _error_diagnostics(errors: List[ErrorDetail]) -> Dict[str, Any]:
         "provider_pressure_detected": bool(
             categories.get("provider_rate_limited")
             or categories.get("provider_timeout")
+        ),
+        "financial_provider_failures_detected": bool(
+            categories.get("financial_provider_error")
         ),
     }
 
