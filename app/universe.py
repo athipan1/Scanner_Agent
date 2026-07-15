@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from functools import lru_cache
 from typing import Iterable, List
 
@@ -52,6 +53,34 @@ def normalize_symbols(symbols: Iterable[str] | None) -> List[str]:
     return normalized
 
 
+def diversify_symbols_by_initial(symbols: Iterable[str] | None) -> List[str]:
+    """Round-robin symbols by first character while preserving per-group order.
+
+    NASDAQ Trader files are alphabetical. Truncating the first 1,000 rows therefore
+    over-samples symbols beginning with A and B. This deterministic round-robin
+    ordering spreads a bounded discovery run across the whole alphabet without
+    randomizing results between workflow runs.
+    """
+
+    groups = defaultdict(deque)
+    for symbol in normalize_symbols(symbols):
+        initial = symbol[0] if symbol else "#"
+        groups[initial].append(symbol)
+
+    ordered: List[str] = []
+    initials = sorted(groups)
+    while initials:
+        remaining = []
+        for initial in initials:
+            group = groups[initial]
+            if group:
+                ordered.append(group.popleft())
+            if group:
+                remaining.append(initial)
+        initials = remaining
+    return ordered
+
+
 def _read_nasdaq_trader_file(file_name: str) -> pd.DataFrame:
     url = f"{NASDAQ_TRADER_BASE_URL}/{file_name}"
     return pd.read_csv(url, sep="|", dtype=str)
@@ -69,7 +98,9 @@ def _filter_listed_equities(table: pd.DataFrame, symbol_column: str) -> List[str
     if "Market Category" in data.columns:
         data = data[data["Market Category"].notna()]
     if "Symbol" in data.columns:
-        data = data[~data["Symbol"].astype(str).str.startswith("File Creation Time", na=False)]
+        data = data[
+            ~data["Symbol"].astype(str).str.startswith("File Creation Time", na=False)
+        ]
 
     return normalize_symbols(data[symbol_column].dropna().tolist())
 
@@ -123,7 +154,9 @@ def load_nasdaq100_symbols() -> List[str]:
 
 @lru_cache(maxsize=1)
 def load_us_listed_universe() -> List[str]:
-    listed_symbols = normalize_symbols(load_nasdaq_listed_symbols() + load_other_listed_symbols())
+    listed_symbols = normalize_symbols(
+        load_nasdaq_listed_symbols() + load_other_listed_symbols()
+    )
     if len(listed_symbols) >= 1_000:
         return listed_symbols
     return []
@@ -133,7 +166,7 @@ def load_us_listed_universe() -> List[str]:
 def load_us_phase1_universe() -> List[str]:
     symbols = normalize_symbols(load_us_listed_universe())
     if len(symbols) >= 1_000:
-        return symbols
+        return diversify_symbols_by_initial(symbols)
 
     symbols = normalize_symbols(load_sp500_symbols() + load_nasdaq100_symbols())
     if len(symbols) >= 300:
@@ -142,7 +175,11 @@ def load_us_phase1_universe() -> List[str]:
     return list(US_LARGE_CAP_FALLBACK)
 
 
-def resolve_universe(symbols: Iterable[str] | None, screener: str = "america", exchange: str = "NASDAQ") -> List[str]:
+def resolve_universe(
+    symbols: Iterable[str] | None,
+    screener: str = "america",
+    exchange: str = "NASDAQ",
+) -> List[str]:
     explicit_symbols = normalize_symbols(symbols)
     if explicit_symbols:
         return explicit_symbols
