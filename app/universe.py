@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from functools import lru_cache
+import re
 from typing import Iterable, List
 
 import pandas as pd
@@ -20,7 +21,6 @@ THAI_BLUE_CHIP_UNIVERSE = [
     "INTUCH", "MINT", "CRC", "OR",
 ]
 
-# Fallback list keeps GitHub Actions stable if public market-listing endpoints are unavailable.
 US_LARGE_CAP_FALLBACK = sorted(set(US_GROWTH_UNIVERSE + [
     "ABBV", "ABT", "ACN", "ADP", "AEP", "AFL", "AIG", "AJG", "ALL", "AMGN",
     "ANET", "APD", "APH", "AXP", "BA", "BK", "BKNG", "BLK", "BMY", "BSX",
@@ -33,6 +33,17 @@ US_LARGE_CAP_FALLBACK = sorted(set(US_GROWTH_UNIVERSE + [
 ]))
 
 NASDAQ_TRADER_BASE_URL = "https://www.nasdaqtrader.com/dynamic/SymDir"
+
+_NON_COMMON_SECURITY_PATTERNS = (
+    re.compile(r"\bwarrants?\b", re.IGNORECASE),
+    re.compile(r"\brights?\b", re.IGNORECASE),
+    re.compile(r"\bunits?\s*$", re.IGNORECASE),
+    re.compile(r"\bpreferred\b", re.IGNORECASE),
+    re.compile(r"\bpreference shares?\b", re.IGNORECASE),
+    re.compile(r"\bnotes?\s+due\b", re.IGNORECASE),
+    re.compile(r"\bbonds?\b", re.IGNORECASE),
+    re.compile(r"\bdebentures?\b", re.IGNORECASE),
+)
 
 
 def normalize_symbols(symbols: Iterable[str] | None) -> List[str]:
@@ -54,13 +65,7 @@ def normalize_symbols(symbols: Iterable[str] | None) -> List[str]:
 
 
 def diversify_symbols_by_initial(symbols: Iterable[str] | None) -> List[str]:
-    """Round-robin symbols by first character while preserving per-group order.
-
-    NASDAQ Trader files are alphabetical. Truncating the first 1,000 rows therefore
-    over-samples symbols beginning with A and B. This deterministic round-robin
-    ordering spreads a bounded discovery run across the whole alphabet without
-    randomizing results between workflow runs.
-    """
+    """Round-robin symbols by first character while preserving group order."""
 
     groups = defaultdict(deque)
     for symbol in normalize_symbols(symbols):
@@ -86,6 +91,15 @@ def _read_nasdaq_trader_file(file_name: str) -> pd.DataFrame:
     return pd.read_csv(url, sep="|", dtype=str)
 
 
+def _is_common_equity_security_name(value: object) -> bool:
+    """Reject explicit derivative/debt classes without guessing from ticker suffix."""
+
+    name = str(value or "").strip()
+    if not name:
+        return True
+    return not any(pattern.search(name) for pattern in _NON_COMMON_SECURITY_PATTERNS)
+
+
 def _filter_listed_equities(table: pd.DataFrame, symbol_column: str) -> List[str]:
     data = table.copy()
 
@@ -93,10 +107,16 @@ def _filter_listed_equities(table: pd.DataFrame, symbol_column: str) -> List[str
         data = data[data["Test Issue"].fillna("N") != "Y"]
     if "ETF" in data.columns:
         data = data[data["ETF"].fillna("N") != "Y"]
+    if "NextShares" in data.columns:
+        data = data[data["NextShares"].fillna("N") != "Y"]
     if "Financial Status" in data.columns:
         data = data[data["Financial Status"].fillna("N") != "D"]
     if "Market Category" in data.columns:
         data = data[data["Market Category"].notna()]
+    if "Security Name" in data.columns:
+        data = data[
+            data["Security Name"].map(_is_common_equity_security_name)
+        ]
     if "Symbol" in data.columns:
         data = data[
             ~data["Symbol"].astype(str).str.startswith("File Creation Time", na=False)
