@@ -2,6 +2,16 @@ name: Scanner Market Smoke Test
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/services/backtest.py"
+      - "app/services/market_ranker.py"
+      - "app/services/sector_rotation.py"
+      - "app/utils/yfinance_frames.py"
+      - "tests/test_backtest_multiindex.py"
+      - "tests/test_yfinance_frames.py"
+      - ".github/workflows/scanner-market-smoke-test.yml"
   schedule:
     # Run every day at 08:30 Thailand time (01:30 UTC)
     - cron: "30 1 * * *"
@@ -15,16 +25,33 @@ jobs:
       - name: Checkout Scanner_Agent
         uses: actions/checkout@v4
 
+      - name: Verify Alpaca market-data secrets
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
+        run: |
+          if [ -z "$APCA_API_KEY_ID" ] || [ -z "$APCA_API_SECRET_KEY" ]; then
+            echo "Alpaca market-data secrets are missing."
+            exit 1
+          fi
+          echo "Alpaca market-data secrets are configured."
+
       - name: Build Scanner_Agent image
         run: |
           docker build -t scanner-agent-smoke-test:latest .
 
       - name: Start Scanner_Agent
+        env:
+          APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
+          APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
         run: |
           docker run -d \
             --name scanner-agent \
             -p 8003:8003 \
             -e SCANNER_DEV_MODE=false \
+            -e TRADING_MODE=PAPER \
+            -e APCA_API_KEY_ID \
+            -e APCA_API_SECRET_KEY \
             scanner-agent-smoke-test:latest
 
       - name: Wait for Scanner_Agent health
@@ -50,22 +77,26 @@ jobs:
           python - <<'PY'
           import json
           import sys
-          import urllib.request
           import urllib.error
-          from pathlib import Path
+          import urllib.request
           from datetime import datetime, timezone
+          from pathlib import Path
 
           BASE_URL = "http://localhost:8003"
           SYMBOLS = [
               "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
               "META", "TSLA", "AMD", "AVGO", "NFLX"
           ]
+          FALLBACK_SOURCES = {"dev_fallback", "yfinance_market_data"}
 
           def post_json(path, payload):
               req = urllib.request.Request(
                   f"{BASE_URL}{path}",
                   data=json.dumps(payload).encode("utf-8"),
-                  headers={"Content-Type": "application/json"},
+                  headers={
+                      "Content-Type": "application/json",
+                      "X-Correlation-ID": "scanner-market-smoke-test",
+                  },
                   method="POST",
               )
               try:
@@ -81,14 +112,34 @@ jobs:
                   return data.get("candidates") or []
               return []
 
-          def has_dev_fallback(candidate):
+          def candidate_source(candidate):
               metadata = candidate.get("metadata") or {}
-              return metadata.get("source") == "dev_fallback"
+              return metadata.get("source")
+
+          def is_fallback_candidate(candidate):
+              return candidate_source(candidate) in FALLBACK_SOURCES
+
+          def is_ranked_technical_candidate(candidate):
+              metadata = candidate.get("metadata") or {}
+              details = metadata.get("details") or {}
+              return (
+                  candidate.get("recommendation") in {"BUY", "STRONG_BUY"}
+                  and isinstance(details, dict)
+                  and isinstance(details.get("scanner_v50"), dict)
+                  and isinstance(details.get("final_score"), (int, float))
+              )
+
+          def is_fundamental_candidate(candidate):
+              metadata = candidate.get("metadata") or {}
+              return all(
+                  key in metadata
+                  for key in ("quality", "growth", "valuation", "grade", "thesis")
+              )
 
           payload = {
               "symbols": SYMBOLS,
               "screener": "default",
-              "exchange": "US"
+              "exchange": "US",
           }
 
           report = {
@@ -98,7 +149,6 @@ jobs:
               "fundamental_scan": None,
               "checks": [],
           }
-
           failures = []
 
           for name, path in [
@@ -108,59 +158,123 @@ jobs:
               response = post_json(path, payload)
               report[name] = response
               candidates = extract_candidates(response)
+              response_error = response.get("error")
+              fallback_symbols = [
+                  candidate.get("symbol")
+                  for candidate in candidates
+                  if isinstance(candidate, dict) and is_fallback_candidate(candidate)
+              ]
+              sources = sorted(
+                  {
+                      source
+                      for source in (
+                          candidate_source(candidate)
+                          for candidate in candidates
+                          if isinstance(candidate, dict)
+                      )
+                      if source
+                  }
+              )
 
               check = {
                   "section": name,
                   "status": response.get("status"),
                   "candidate_count": len(candidates),
-                  "symbols_found": [c.get("symbol") for c in candidates if isinstance(c, dict)],
-                  "has_dev_fallback": any(has_dev_fallback(c) for c in candidates if isinstance(c, dict)),
+                  "symbols_found": [
+                      candidate.get("symbol")
+                      for candidate in candidates
+                      if isinstance(candidate, dict)
+                  ],
+                  "candidate_sources": sources,
+                  "fallback_symbols": fallback_symbols,
+                  "response_error": response_error,
+                  "correlation_id": response.get("correlation_id"),
               }
               report["checks"].append(check)
 
               if response.get("status") != "success":
                   failures.append(f"{name}: response status is not success")
+              if response.get("correlation_id") != "scanner-market-smoke-test":
+                  failures.append(f"{name}: correlation ID was not propagated")
+              if response_error:
+                  failures.append(
+                      f"{name}: response contains hidden scanner errors: {response_error}"
+                  )
               if not candidates:
                   failures.append(f"{name}: scanner returned zero candidates")
-              if check["has_dev_fallback"]:
-                  failures.append(f"{name}: scanner used dev_fallback instead of real market scan")
+              if fallback_symbols:
+                  failures.append(
+                      f"{name}: fallback candidates were returned: {fallback_symbols}"
+                  )
+
+              if name == "technical_scan":
+                  invalid = [
+                      candidate.get("symbol")
+                      for candidate in candidates
+                      if isinstance(candidate, dict)
+                      and not is_ranked_technical_candidate(candidate)
+                  ]
+                  if invalid:
+                      failures.append(
+                          "technical_scan: candidates are missing Scanner V5 ranking "
+                          f"evidence or BUY recommendation: {invalid}"
+                      )
+              else:
+                  invalid = [
+                      candidate.get("symbol")
+                      for candidate in candidates
+                      if isinstance(candidate, dict)
+                      and not is_fundamental_candidate(candidate)
+                  ]
+                  if invalid:
+                      failures.append(
+                          "fundamental_scan: candidates are missing quality/growth/"
+                          f"valuation evidence: {invalid}"
+                      )
 
           Path("reports/scanner-market-smoke-test.json").write_text(
               json.dumps(report, ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
 
-          lines = []
-          lines.append("# Scanner Market Smoke Test")
-          lines.append("")
-          lines.append(f"Generated at UTC: `{report['generated_at']}`")
-          lines.append("")
-          lines.append("## Symbols Tested")
-          lines.append(", ".join(SYMBOLS))
-          lines.append("")
-          lines.append("## Results")
-          lines.append("| Section | Status | Candidate Count | Symbols Found | Dev Fallback |")
-          lines.append("|---|---|---:|---|---|")
+          lines = [
+              "# Scanner Market Smoke Test",
+              "",
+              f"Generated at UTC: `{report['generated_at']}`",
+              "",
+              "## Symbols Tested",
+              ", ".join(SYMBOLS),
+              "",
+              "## Results",
+              "| Section | Status | Candidate Count | Symbols Found | Sources | Error |",
+              "|---|---|---:|---|---|---|",
+          ]
           for check in report["checks"]:
               lines.append(
-                  f"| {check['section']} | {check['status']} | {check['candidate_count']} | "
-                  f"{', '.join([s for s in check['symbols_found'] if s]) or '-'} | {check['has_dev_fallback']} |"
+                  f"| {check['section']} | {check['status']} | "
+                  f"{check['candidate_count']} | "
+                  f"{', '.join([s for s in check['symbols_found'] if s]) or '-'} | "
+                  f"{', '.join(check['candidate_sources']) or 'ranked scanner'} | "
+                  f"{bool(check['response_error'])} |"
               )
           lines.append("")
 
           if failures:
               lines.append("## Failures")
-              for failure in failures:
-                  lines.append(f"- {failure}")
+              lines.extend(f"- {failure}" for failure in failures)
           else:
-              lines.append("## Verdict")
-              lines.append("Scanner_Agent returned real market candidates without dev fallback.")
+              lines.extend(
+                  [
+                      "## Verdict",
+                      "Scanner_Agent returned ranked market candidates without "
+                      "provider errors or fallback substitution.",
+                  ]
+              )
 
           Path("reports/scanner-market-smoke-test.md").write_text(
               "\n".join(lines),
               encoding="utf-8",
           )
-
           print("\n".join(lines))
 
           if failures:
@@ -169,6 +283,19 @@ jobs:
                   print(f"- {failure}", file=sys.stderr)
               sys.exit(1)
           PY
+
+      - name: Fail on hidden provider or dataframe errors
+        run: |
+          docker logs scanner-agent > reports/scanner-agent.log 2>&1
+          if grep -Eiq \
+            "401 Authorization Required|truth value of a Series is ambiguous|FutureWarning: Calling float on a single element Series" \
+            reports/scanner-agent.log; then
+            echo "Scanner logs contain a hidden provider or dataframe failure."
+            grep -Ein \
+              "401 Authorization Required|truth value of a Series is ambiguous|FutureWarning: Calling float on a single element Series" \
+              reports/scanner-agent.log || true
+            exit 1
+          fi
 
       - name: Upload scanner smoke test report
         if: always()

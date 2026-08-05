@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 
 import yfinance as yf
 
+from app.utils.yfinance_frames import extract_yfinance_series
+
 
 SECTOR_ETF_MAP = {
     "Technology": "XLK",
@@ -62,10 +64,14 @@ def _get_symbol_profile(symbol: str) -> Dict[str, Optional[str]]:
 @lru_cache(maxsize=128)
 def _return_20d(symbol: str) -> Optional[float]:
     try:
-        history = yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
-        if history is None or history.empty or "Close" not in history:
-            return None
-        closes = history["Close"].dropna()
+        history = yf.download(
+            symbol,
+            period="3mo",
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+        )
+        closes = extract_yfinance_series(history, "Close", symbol)
         if len(closes) < 21:
             return None
         return _pct_return(float(closes.iloc[-21]), float(closes.iloc[-1]))
@@ -92,7 +98,9 @@ def get_sector_rotation_score(symbol: str) -> SectorRotationResult:
             benchmark_return_20d=None,
             relative_strength_20d=None,
             score=0.50,
-            reason=["ยังไม่มีข้อมูล Sector ETF สำหรับเปรียบเทียบกลุ่มอุตสาหกรรม"],
+            reason=[
+                "ยังไม่มีข้อมูล Sector ETF สำหรับเปรียบเทียบกลุ่มอุตสาหกรรม"
+            ],
         )
 
     sector_return = _return_20d(sector_etf)
@@ -114,7 +122,6 @@ def get_sector_rotation_score(symbol: str) -> SectorRotationResult:
             reason=["ข้อมูล Sector Rotation ยังไม่เพียงพอ"],
         )
 
-    # -10% relative strength maps near 0; +10% maps near 1.
     score = _clamp01((relative_strength + 0.10) / 0.20)
 
     if sector:
@@ -125,7 +132,9 @@ def get_sector_rotation_score(symbol: str) -> SectorRotationResult:
     reasons.append(f"ผลตอบแทน SPY 20 วัน: {benchmark_return:.2%}")
 
     if relative_strength > 0:
-        reasons.append(f"Sector แข็งแรงกว่า SPY ประมาณ {relative_strength:.2%}")
+        reasons.append(
+            f"Sector แข็งแรงกว่า SPY ประมาณ {relative_strength:.2%}"
+        )
     else:
         reasons.append(f"Sector อ่อนกว่า SPY ประมาณ {relative_strength:.2%}")
 

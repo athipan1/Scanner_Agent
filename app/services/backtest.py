@@ -6,6 +6,8 @@ from typing import Dict, Optional
 
 import yfinance as yf
 
+from app.utils.yfinance_frames import extract_yfinance_series
+
 
 @dataclass
 class BacktestResult:
@@ -34,7 +36,14 @@ def get_backtest_result(symbol: str) -> BacktestResult:
     reasons: list[str] = []
 
     try:
-        history = yf.download(symbol, period="6mo", interval="1d", progress=False, auto_adjust=True)
+        history = yf.download(
+            symbol,
+            period="6mo",
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+        )
+        closes = extract_yfinance_series(history, "Close", symbol)
     except Exception as exc:
         return BacktestResult(
             symbol=symbol,
@@ -46,7 +55,7 @@ def get_backtest_result(symbol: str) -> BacktestResult:
             reason=[f"ดึงข้อมูลย้อนหลังไม่สำเร็จ: {exc}"],
         )
 
-    if history is None or history.empty or "Close" not in history:
+    if closes.empty:
         return BacktestResult(
             symbol=symbol,
             current_price=None,
@@ -57,11 +66,10 @@ def get_backtest_result(symbol: str) -> BacktestResult:
             reason=["ไม่มีข้อมูลราคาย้อนหลังเพียงพอสำหรับ Backtest"],
         )
 
-    closes = history["Close"].dropna()
     if len(closes) < 25:
         return BacktestResult(
             symbol=symbol,
-            current_price=float(closes.iloc[-1]) if len(closes) else None,
+            current_price=float(closes.iloc[-1]),
             return_5d=None,
             return_20d=None,
             win_rate=None,
@@ -70,19 +78,32 @@ def get_backtest_result(symbol: str) -> BacktestResult:
         )
 
     current_price = float(closes.iloc[-1])
-    return_5d = _pct_return(float(closes.iloc[-6]), current_price) if len(closes) >= 6 else None
-    return_20d = _pct_return(float(closes.iloc[-21]), current_price) if len(closes) >= 21 else None
+    return_5d = (
+        _pct_return(float(closes.iloc[-6]), current_price)
+        if len(closes) >= 6
+        else None
+    )
+    return_20d = (
+        _pct_return(float(closes.iloc[-21]), current_price)
+        if len(closes) >= 21
+        else None
+    )
 
     forward_returns = []
     for i in range(20, len(closes) - 5):
-        ma20 = closes.iloc[i - 20:i].mean()
-        if closes.iloc[i] > ma20:
-            forward_returns.append(_pct_return(float(closes.iloc[i]), float(closes.iloc[i + 5])))
+        current = float(closes.iloc[i])
+        ma20 = float(closes.iloc[i - 20 : i].mean())
+        if current > ma20:
+            forward_returns.append(
+                _pct_return(current, float(closes.iloc[i + 5]))
+            )
 
     clean_forward_returns = [r for r in forward_returns if r is not None]
     win_rate = None
     if clean_forward_returns:
-        win_rate = sum(1 for r in clean_forward_returns if r > 0) / len(clean_forward_returns)
+        win_rate = sum(1 for r in clean_forward_returns if r > 0) / len(
+            clean_forward_returns
+        )
 
     score_parts = []
     if return_5d is not None:
@@ -101,7 +122,9 @@ def get_backtest_result(symbol: str) -> BacktestResult:
 
     if win_rate is not None:
         score_parts.append(_clamp01(win_rate))
-        reasons.append(f"Win Rate ย้อนหลังของสัญญาณเหนือ MA20 ประมาณ {win_rate:.2%}")
+        reasons.append(
+            f"Win Rate ย้อนหลังของสัญญาณเหนือ MA20 ประมาณ {win_rate:.2%}"
+        )
 
     score = sum(score_parts) / len(score_parts) if score_parts else 0.50
     if score >= 0.70:
