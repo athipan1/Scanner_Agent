@@ -31,6 +31,7 @@ def test_reuses_existing_yfinance_info_and_accepts_partial_valuation(monkeypatch
         "AAPL",
         "NASDAQ",
         yfinance_info={
+            "currentPrice": 99.5,
             "trailingPE": 24.0,
             "pegRatio": None,
             "priceToBook": None,
@@ -41,6 +42,7 @@ def test_reuses_existing_yfinance_info_and_accepts_partial_valuation(monkeypatch
 
     assert result is not None
     assert result["currentPrice"] == 101.25
+    assert result["field_sources"]["currentPrice"] == "alpaca_latest_quote"
     assert result["valuation_metric_count"] == 1
     assert result["valuation_data_complete"] is False
     assert result["market_data_sources"] == [
@@ -71,6 +73,7 @@ def test_market_snapshot_reports_complete_provider_data_and_quality(monkeypatch)
         "AAPL",
         "NASDAQ",
         yfinance_info={
+            "currentPrice": 99.5,
             "marketCap": 3_000_000_000_000,
             "averageVolume": 55_000_000,
             "sector": "Technology",
@@ -89,6 +92,7 @@ def test_market_snapshot_reports_complete_provider_data_and_quality(monkeypatch)
         },
     )
 
+    assert snapshot["currentPrice"] == 101.25
     assert snapshot["alpacaAskPrice"] == 101.25
     assert snapshot["alpacaBidPrice"] == 101.0
     assert snapshot["alpacaMidpoint"] == 101.125
