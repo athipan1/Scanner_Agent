@@ -32,6 +32,15 @@ _FUNDAMENTAL_TO_YFINANCE = {
     "fifty_two_week_low": "fiftyTwoWeekLow",
 }
 
+_STATEMENT_COVERAGE_FIELDS = {
+    "annual_income_statement": "has_annual_income_statement",
+    "annual_balance_sheet": "has_annual_balance_sheet",
+    "annual_cash_flow": "has_annual_cash_flow",
+    "quarterly_income_statement": "has_quarterly_income_statement",
+    "quarterly_balance_sheet": "has_quarterly_balance_sheet",
+    "quarterly_cash_flow": "has_quarterly_cash_flow",
+}
+
 
 def _component_status(value: Any, fields: Iterable[str]) -> str:
     if not isinstance(value, dict):
@@ -57,6 +66,70 @@ def _synthetic_yfinance_info(details: Dict[str, Any]) -> Dict[str, Any]:
     if info.get("regularMarketPrice") is None and market_rank.get("price") is not None:
         info["regularMarketPrice"] = market_rank.get("price")
     return info
+
+
+def build_fundamental_data_bundle(
+    symbol: str,
+    financials: Dict[str, Any],
+    financial_diagnostics: Dict[str, Any],
+    market: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build one data-quality contract for all fundamental discovery paths."""
+
+    statement_coverage = {
+        output_name: bool(financials.get(source_name))
+        for output_name, source_name in _STATEMENT_COVERAGE_FIELDS.items()
+    }
+    available_statements = [
+        name for name, available in statement_coverage.items() if available
+    ]
+    missing_statements = [
+        name for name, available in statement_coverage.items() if not available
+    ]
+    sources = ["yfinance_financial_statements"]
+    for source in market.get("market_data_sources") or []:
+        if source not in sources:
+            sources.append(source)
+
+    market_quality = market.get("data_quality") or {}
+    statement_status = (
+        "complete"
+        if not missing_statements
+        else "partial"
+        if available_statements
+        else "missing"
+    )
+    overall_status = (
+        "complete"
+        if statement_status == "complete" and market_quality.get("status") == "complete"
+        else "partial"
+        if available_statements or market_quality.get("status") in {"complete", "partial"}
+        else "missing"
+    )
+
+    return {
+        "schema_version": DATA_BUNDLE_SCHEMA_VERSION,
+        "symbol": symbol,
+        "sources": sources,
+        "market_snapshot": market,
+        "financial_statements": {
+            "yf_symbol": financials.get("yf_symbol"),
+            "provider_status": financial_diagnostics.get("status"),
+            "provider_errors": financial_diagnostics.get("provider_errors") or [],
+            "statement_coverage": statement_coverage,
+            "available_statements": available_statements,
+            "missing_statements": missing_statements,
+        },
+        "data_quality": {
+            "status": overall_status,
+            "market": market_quality,
+            "financial_statements": {
+                "status": statement_status,
+                "available_statements": available_statements,
+                "missing_statements": missing_statements,
+            },
+        },
+    }
 
 
 def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[str, Any]:
