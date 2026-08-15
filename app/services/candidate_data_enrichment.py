@@ -7,7 +7,7 @@ from app.data_sources.market_data import get_market_snapshot
 DATA_BUNDLE_SCHEMA_VERSION = "scanner-data-bundle.v1"
 
 _FUNDAMENTAL_TO_YFINANCE = {
-    "current_price": "currentPrice",
+    "current_price": "regularMarketPrice",
     "average_volume": "averageVolume",
     "market_cap": "marketCap",
     "enterprise_value": "enterpriseValue",
@@ -54,8 +54,8 @@ def _synthetic_yfinance_info(details: Dict[str, Any]) -> Dict[str, Any]:
         for source, target in _FUNDAMENTAL_TO_YFINANCE.items()
         if fundamental.get(source) is not None
     }
-    if info.get("currentPrice") is None and market_rank.get("price") is not None:
-        info["currentPrice"] = market_rank.get("price")
+    if info.get("regularMarketPrice") is None and market_rank.get("price") is not None:
+        info["regularMarketPrice"] = market_rank.get("price")
     return info
 
 
