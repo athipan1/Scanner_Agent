@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Tuple
+from typing import List, Tuple
 
 from app.analyzers import growth_analyzer, quality_analyzer, valuation_analyzer
 from app.data_sources import financial_statements, market_data
@@ -11,68 +11,7 @@ from app.models import (
     ValuationMetrics,
 )
 from app.scoring import fundamental_score
-from app.services.candidate_data_enrichment import DATA_BUNDLE_SCHEMA_VERSION
-
-
-def _fundamental_data_bundle(
-    symbol: str,
-    financials: Dict[str, Any],
-    financial_diagnostics: Dict[str, Any],
-    market: Dict[str, Any],
-) -> Dict[str, Any]:
-    statement_coverage = {
-        "annual_income_statement": bool(financials.get("has_annual_income_statement")),
-        "annual_balance_sheet": bool(financials.get("has_annual_balance_sheet")),
-        "annual_cash_flow": bool(financials.get("has_annual_cash_flow")),
-        "quarterly_income_statement": bool(financials.get("has_quarterly_income_statement")),
-        "quarterly_balance_sheet": bool(financials.get("has_quarterly_balance_sheet")),
-        "quarterly_cash_flow": bool(financials.get("has_quarterly_cash_flow")),
-    }
-    available_statements = [
-        name for name, available in statement_coverage.items() if available
-    ]
-    missing_statements = [
-        name for name, available in statement_coverage.items() if not available
-    ]
-    sources = ["yfinance_financial_statements"]
-    for source in market.get("market_data_sources") or []:
-        if source not in sources:
-            sources.append(source)
-
-    return {
-        "schema_version": DATA_BUNDLE_SCHEMA_VERSION,
-        "symbol": symbol,
-        "sources": sources,
-        "market_snapshot": market,
-        "financial_statements": {
-            "yf_symbol": financials.get("yf_symbol"),
-            "provider_status": financial_diagnostics.get("status"),
-            "provider_errors": financial_diagnostics.get("provider_errors") or [],
-            "statement_coverage": statement_coverage,
-            "available_statements": available_statements,
-            "missing_statements": missing_statements,
-        },
-        "data_quality": {
-            "status": (
-                "complete"
-                if not missing_statements
-                and (market.get("data_quality") or {}).get("status") == "complete"
-                else "partial"
-            ),
-            "market": market.get("data_quality") or {},
-            "financial_statements": {
-                "status": (
-                    "complete"
-                    if not missing_statements
-                    else "partial"
-                    if available_statements
-                    else "missing"
-                ),
-                "available_statements": available_statements,
-                "missing_statements": missing_statements,
-            },
-        },
-    }
+from app.services.candidate_data_enrichment import build_fundamental_data_bundle
 
 
 def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalCandidate]:
@@ -165,7 +104,7 @@ def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalC
         ),
         thesis=thesis,
         details={
-            "data_bundle": _fundamental_data_bundle(
+            "data_bundle": build_fundamental_data_bundle(
                 symbol,
                 financials,
                 financial_diagnostics,
