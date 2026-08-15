@@ -6,8 +6,8 @@ from pydantic.generics import GenericModel
 T = TypeVar("T")
 
 SCANNER_AGENT_TYPE = "scanner"
-SCANNER_AGENT_VERSION = "1.2.0"
-SCANNER_SERVICE_VERSION = "1.2.0"
+SCANNER_AGENT_VERSION = "1.3.0"
+SCANNER_SERVICE_VERSION = "1.3.0"
 SCHEMA_VERSION = "1.0"
 
 StrategyBucket = Literal["core_dividend", "value_rebound", "news_momentum"]
@@ -88,6 +88,13 @@ class CandidateResult(BaseModel):
         self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
         return self
 
+    @model_validator(mode="after")
+    def populate_complete_data_bundle(self):
+        from app.services.candidate_data_enrichment import enrich_candidate_metadata
+
+        self.metadata = enrich_candidate_metadata(self.symbol, self.metadata)
+        return self
+
 
 class ScannerCandidateContract(BaseModel):
     """
@@ -123,9 +130,6 @@ class ScannerCandidateContract(BaseModel):
         enriched = enrich_candidate_metadata_with_bucket_hints(candidate_context, self.metadata)
         self.metadata = enriched
         self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
-        # Typed bucket hints stay in ``bucket_hint``/metadata. They must never be
-        # copied into generic tags because Manager interprets human tags as
-        # independent evidence and would double-count Scanner's own hint.
         return self
 
 
@@ -164,7 +168,6 @@ class StandardAgentResponse(GenericModel, Generic[T]):
         return value
 
 
-# Internal models for Fundamental analysis results
 class QualityMetrics(BaseModel):
     roe: Optional[float]
     roa: Optional[float]
@@ -195,3 +198,4 @@ class FundamentalCandidate(BaseModel):
     growth: GrowthMetrics
     valuation: ValuationMetrics
     thesis: str
+    details: Dict[str, Any] = Field(default_factory=dict)

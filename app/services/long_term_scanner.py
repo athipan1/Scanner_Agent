@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Tuple
+from typing import List, Tuple
 
 from app.analyzers import growth_analyzer, quality_analyzer, valuation_analyzer
 from app.data_sources import financial_statements, market_data
@@ -11,14 +11,21 @@ from app.models import (
     ValuationMetrics,
 )
 from app.scoring import fundamental_score
+from app.services.candidate_data_enrichment import build_fundamental_data_bundle
 
 
 def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalCandidate]:
     """Perform a full fundamental analysis on one stock symbol."""
 
-    financials = financial_statements.get_financials(symbol, exchange)
+    financials, financial_diagnostics = financial_statements.get_financials_with_diagnostics(
+        symbol,
+        exchange,
+    )
     if not financials:
-        raise ValueError("missing financial statements")
+        raise ValueError(
+            "missing financial statements "
+            f"({financial_diagnostics.get('status', 'unknown')})"
+        )
 
     market = market_data.get_market_data(
         symbol,
@@ -96,6 +103,14 @@ def analyze_stock(symbol: str, exchange: str = "SET") -> Tuple[str, FundamentalC
             }
         ),
         thesis=thesis,
+        details={
+            "data_bundle": build_fundamental_data_bundle(
+                symbol,
+                financials,
+                financial_diagnostics,
+                market,
+            )
+        },
     )
 
 

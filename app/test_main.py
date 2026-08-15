@@ -14,7 +14,7 @@ def test_health_check():
     json_data = response.json()
     assert json_data["status"] == "success"
     assert json_data["agent_type"] == "scanner"
-    assert json_data["version"] == "1.2.0"
+    assert json_data["version"] == "1.3.0"
     assert "timestamp" in json_data
     ts = json_data["timestamp"].replace("Z", "+00:00")
     datetime.fromisoformat(ts)
