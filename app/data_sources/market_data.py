@@ -264,9 +264,9 @@ def get_market_snapshot(
 
     for key in _INFO_FIELDS:
         value = info.get(key)
-        if value is not None:
+        if value is not None and snapshot.get(key) is None:
             snapshot[key] = value
-            field_sources.setdefault(key, "yfinance_info")
+            field_sources[key] = "yfinance_info"
 
     fast_field_map = {
         "previousClose": ("previous_close", "previousClose"),
