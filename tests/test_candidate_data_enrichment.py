@@ -1,3 +1,4 @@
+from app.models import CandidateResult
 from app.services import candidate_data_enrichment as enrichment
 
 
@@ -82,7 +83,7 @@ def test_builds_complete_bundle_and_reuses_existing_fundamental_values(monkeypat
     assert captured["exchange"] == "NASDAQ"
     assert captured["yfinance_info"]["marketCap"] == 3_000_000_000_000
     assert captured["yfinance_info"]["returnOnAssets"] == 0.24
-    assert captured["yfinance_info"]["currentPrice"] == 100.0
+    assert captured["yfinance_info"]["regularMarketPrice"] == 100.0
 
 
 def test_enriches_scanner_v5_metadata_without_mutating_source(monkeypatch):
@@ -98,6 +99,25 @@ def test_enriches_scanner_v5_metadata_without_mutating_source(monkeypatch):
     assert "data_bundle" not in original["details"]
     assert result is not original
     assert result["details"]["data_bundle"]["symbol"] == "AAPL"
+
+
+def test_candidate_result_contract_attaches_data_bundle(monkeypatch):
+    monkeypatch.setattr(
+        enrichment,
+        "get_market_snapshot",
+        lambda symbol, exchange, yfinance_info: complete_snapshot(),
+    )
+
+    candidate = CandidateResult(
+        symbol="AAPL",
+        confidence_score=0.82,
+        recommendation="BUY",
+        metadata={"details": scanner_details()},
+    )
+
+    bundle = candidate.metadata["details"]["data_bundle"]
+    assert bundle["schema_version"] == "scanner-data-bundle.v1"
+    assert bundle["market_snapshot"]["currentPrice"] == 101.25
 
 
 def test_skips_generic_candidate_details_to_avoid_provider_side_effects(monkeypatch):
