@@ -160,6 +160,8 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
         return metadata
     if isinstance(details.get("data_bundle"), dict):
         return metadata
+    if not isinstance(details.get("scanner_v50"), dict):
+        return metadata
 
     enriched = dict(metadata)
     enriched_details = dict(details)
