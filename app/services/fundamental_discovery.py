@@ -10,6 +10,7 @@ from app.data_sources import financial_statements, market_data
 from app.models import ErrorDetail, ScannerCandidateContract
 from app.scoring import fundamental_score
 from app.services.bucket_hints import build_strategy_bucket_hints
+from app.services.candidate_data_enrichment import build_fundamental_data_bundle
 from app.universe import (
     US_GROWTH_UNIVERSE,
     US_LARGE_CAP_FALLBACK,
@@ -315,6 +316,12 @@ def analyze_fundamental_candidate(
             "has_annual_income_statement"
         ),
         "has_annual_cash_flow": annual_diagnostics.get("has_annual_cash_flow"),
+        "data_bundle": build_fundamental_data_bundle(
+            symbol,
+            financials,
+            financial_diagnostics,
+            market,
+        ),
         "source": "real_market_fundamental_discovery",
     }
     bucket_hints = build_strategy_bucket_hints(raw_scores, base_metadata)
