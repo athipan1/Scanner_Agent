@@ -1,4 +1,4 @@
-from app.services.long_term_scanner import _fundamental_data_bundle
+from app.services.candidate_data_enrichment import build_fundamental_data_bundle
 
 
 def test_fundamental_bundle_reports_statement_and_market_coverage():
@@ -24,7 +24,7 @@ def test_fundamental_bundle_reports_statement_and_market_coverage():
         },
     }
 
-    bundle = _fundamental_data_bundle(
+    bundle = build_fundamental_data_bundle(
         "AAPL",
         financials,
         diagnostics,
