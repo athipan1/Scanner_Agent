@@ -23,6 +23,7 @@ from app.universe import (
 
 _NON_TRADABLE_DISCOVERY_SYMBOLS = {"CASH", "USD", "USDT", "USDC"}
 _MAX_PROVIDER_WORKERS = 4
+_DEGRADED_PROVIDER_WORKERS = 2
 _ERROR_SAMPLE_LIMIT = 5
 
 
@@ -104,7 +105,16 @@ def _initial_coverage(symbols: List[str]) -> List[str]:
 
 
 def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
-    """Build a broad, deterministic, common-equity US universe."""
+    """Build a deterministic US universe and fail degraded to benchmark names.
+
+    A broad Nasdaq-listed fill is useful only when both benchmark membership
+    sources are healthy. If either S&P 500 or Nasdaq-100 discovery is unavailable,
+    expanding a small fallback set with hundreds of low-information listed names
+    amplifies provider traffic and can turn transient empty responses into a
+    misleading discovery result. In degraded mode we therefore keep only the
+    large-cap/growth benchmark fallback set and let the next hourly cycle retry the
+    live benchmark sources.
+    """
 
     live_sp500 = load_sp500_symbols()
     live_nasdaq100 = load_nasdaq100_symbols()
@@ -114,9 +124,23 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
     nasdaq100 = live_nasdaq100 or list(US_GROWTH_UNIVERSE)
     priority = normalize_symbols(sp500 + nasdaq100)
     priority_set = set(priority)
-    listed_fill = diversify_symbols_by_initial(
-        symbol for symbol in nasdaq_listed if symbol not in priority_set
-    )
+
+    benchmark_sources_complete = bool(live_sp500) and bool(live_nasdaq100)
+    degraded_reasons: List[str] = []
+    if not live_sp500:
+        degraded_reasons.append("sp500_source_unavailable")
+    if not live_nasdaq100:
+        degraded_reasons.append("nasdaq100_source_unavailable")
+
+    if benchmark_sources_complete:
+        listed_fill = diversify_symbols_by_initial(
+            symbol for symbol in nasdaq_listed if symbol not in priority_set
+        )
+        selection_order = "large_cap_priority_then_round_robin_initial"
+    else:
+        listed_fill = []
+        selection_order = "degraded_large_cap_fallback_only"
+
     raw_symbols = normalize_symbols(priority + listed_fill)
     symbols = [symbol for symbol in raw_symbols if _is_discoverable_stock_symbol(symbol)]
     excluded_count = len(raw_symbols) - len(symbols)
@@ -132,10 +156,15 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
             "nasdaq_listed_count": len(nasdaq_listed),
             "sp500_fallback_used": not bool(live_sp500),
             "nasdaq100_fallback_used": not bool(live_nasdaq100),
+            "benchmark_sources_complete": benchmark_sources_complete,
+            "universe_degraded": not benchmark_sources_complete,
+            "universe_degraded_reasons": degraded_reasons,
+            "broad_listed_fill_enabled": benchmark_sources_complete,
+            "requested_max_universe": max_universe,
             "priority_large_cap_count": len(priority),
             "listed_initial_coverage": _initial_coverage(nasdaq_listed),
             "selected_initial_coverage": _initial_coverage(symbols),
-            "selection_order": "large_cap_priority_then_round_robin_initial",
+            "selection_order": selection_order,
             "listed_security_filter": "common_equity_description_v1",
             "excluded_non_tradable_symbol_count": excluded_count,
             "selected_universe_count": len(symbols),
@@ -405,7 +434,13 @@ def discover_best_fundamentals(
     ]
     candidates: List[ScannerCandidateContract] = []
     errors: List[ErrorDetail] = []
-    effective_workers = max(1, min(int(max_workers), _MAX_PROVIDER_WORKERS))
+    universe_sources = universe_info.get("sources") or {}
+    provider_worker_cap = (
+        _DEGRADED_PROVIDER_WORKERS
+        if universe_sources.get("universe_degraded")
+        else _MAX_PROVIDER_WORKERS
+    )
+    effective_workers = max(1, min(int(max_workers), provider_worker_cap))
 
     with ThreadPoolExecutor(max_workers=effective_workers) as executor:
         future_to_symbol = {
@@ -466,7 +501,7 @@ def discover_best_fundamentals(
     attempted_count = len(symbols)
 
     metadata = {
-        **universe_info["sources"],
+        **universe_sources,
         "attempted_count": attempted_count,
         "analyzed_count": len(candidates),
         "error_count": len(errors),
@@ -475,7 +510,7 @@ def discover_best_fundamentals(
         else 0.0,
         "requested_max_workers": max_workers,
         "effective_max_workers": effective_workers,
-        "provider_worker_cap": _MAX_PROVIDER_WORKERS,
+        "provider_worker_cap": provider_worker_cap,
         **error_diagnostics,
         "top_n": top_n,
         "exchange": exchange,
