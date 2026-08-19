@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable
 
 from app.data_sources.market_data import get_market_snapshot
+from app.services.opportunity_profile import build_opportunity_profile
 
 DATA_BUNDLE_SCHEMA_VERSION = "scanner-data-bundle.v1"
 
@@ -107,7 +108,7 @@ def build_fundamental_data_bundle(
         else "missing"
     )
 
-    return {
+    bundle = {
         "schema_version": DATA_BUNDLE_SCHEMA_VERSION,
         "symbol": symbol,
         "sources": sources,
@@ -130,6 +131,8 @@ def build_fundamental_data_bundle(
             },
         },
     }
+    bundle["opportunity_profile"] = build_opportunity_profile(bundle)
+    return bundle
 
 
 def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[str, Any]:
@@ -194,7 +197,7 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
         if present and source not in sources:
             sources.append(source)
 
-    return {
+    bundle = {
         "schema_version": DATA_BUNDLE_SCHEMA_VERSION,
         "symbol": symbol,
         "sources": sources,
@@ -223,6 +226,8 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
             "market_missing_fields": (market_snapshot.get("data_quality") or {}).get("missing_fields", []),
         },
     }
+    bundle["opportunity_profile"] = build_opportunity_profile(bundle)
+    return bundle
 
 
 def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -231,8 +236,17 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
     details = metadata.get("details")
     if not isinstance(details, dict):
         return metadata
-    if isinstance(details.get("data_bundle"), dict):
-        return metadata
+    existing_bundle = details.get("data_bundle")
+    if isinstance(existing_bundle, dict):
+        if isinstance(existing_bundle.get("opportunity_profile"), dict):
+            return metadata
+        enriched = dict(metadata)
+        enriched_details = dict(details)
+        enriched_bundle = dict(existing_bundle)
+        enriched_bundle["opportunity_profile"] = build_opportunity_profile(enriched_bundle)
+        enriched_details["data_bundle"] = enriched_bundle
+        enriched["details"] = enriched_details
+        return enriched
     if not isinstance(details.get("scanner_v50"), dict):
         return metadata
 
@@ -241,7 +255,7 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
     try:
         enriched_details["data_bundle"] = build_candidate_data_bundle(symbol, enriched_details)
     except Exception as exc:
-        enriched_details["data_bundle"] = {
+        fallback_bundle = {
             "schema_version": DATA_BUNDLE_SCHEMA_VERSION,
             "symbol": symbol,
             "sources": ["tradingview"],
@@ -262,5 +276,7 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
                 ],
             },
         }
+        fallback_bundle["opportunity_profile"] = build_opportunity_profile(fallback_bundle)
+        enriched_details["data_bundle"] = fallback_bundle
     enriched["details"] = enriched_details
     return enriched
