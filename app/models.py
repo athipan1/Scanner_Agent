@@ -137,14 +137,40 @@ class ScannerContractResult(BaseModel):
     scan_type: str = "candidate_discovery"
     count: int
     candidates: List[ScannerCandidateContract] = Field(default_factory=list)
+    production_candidates: List[ScannerCandidateContract] = Field(default_factory=list)
+    research_candidates: List[ScannerCandidateContract] = Field(default_factory=list)
+    lane_summary: Dict[str, Any] = Field(default_factory=dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     errors: Dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def populate_shadow_lanes(self):
+        from app.services.shadow_lane import partition_candidates_by_lane
+
+        production, research, summary = partition_candidates_by_lane(self.candidates)
+        self.production_candidates = production
+        self.research_candidates = research
+        self.lane_summary = summary
+        return self
 
 
 class ScannerResult(BaseModel):
     scan_type: str
     count: int
     candidates: List[CandidateResult] = Field(default_factory=list)
+    production_candidates: List[CandidateResult] = Field(default_factory=list)
+    research_candidates: List[CandidateResult] = Field(default_factory=list)
+    lane_summary: Dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def populate_shadow_lanes(self):
+        from app.services.shadow_lane import partition_candidates_by_lane
+
+        production, research, summary = partition_candidates_by_lane(self.candidates)
+        self.production_candidates = production
+        self.research_candidates = research
+        self.lane_summary = summary
+        return self
 
 
 class StandardAgentResponse(GenericModel, Generic[T]):
