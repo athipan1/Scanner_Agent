@@ -170,7 +170,9 @@ def _spread_sanity(
     structural_valid = True
     liquid_bound_valid = True
 
-    if spread_bps is not None and (spread_bps < 0 or spread_bps > HARD_SPREAD_SANITY_MAX_BPS):
+    if spread_bps is not None and (
+        spread_bps < 0 or spread_bps > HARD_SPREAD_SANITY_MAX_BPS
+    ):
         structural_valid = False
         reasons.append("spread_structurally_invalid")
     if bid is not None and bid <= 0:
@@ -201,7 +203,7 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
 
     Quote freshness and the US regular session are evidence states rather than
     workflow errors. Closed/stale evidence is routed to review. Structurally invalid
-    or critically incomplete evidence fails closed.
+    executable quotes or critically incomplete evidence fail closed.
     """
 
     market = data_bundle.get("market_snapshot") or {}
@@ -300,7 +302,13 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
         "stale_quote",
         "missing_quote_timestamp",
     }
-    fail_closed = not critical or not structural_spread_valid
+
+    # A stale/closed quote is non-executable evidence, not a broken workflow. Its
+    # bid/ask may legitimately be missing or structurally unusable after the session.
+    # Keep strict spread fail-closed behavior for executable/unverified quotes.
+    fail_closed = (not critical) or (
+        not quote_blocks_qualification and not structural_spread_valid
+    )
 
     if fail_closed:
         status = "avoid"
