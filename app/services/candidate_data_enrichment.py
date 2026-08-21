@@ -203,6 +203,7 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
         symbol,
         exchange=exchange,
         yfinance_info=_synthetic_yfinance_info(details) or None,
+        include_execution_history=True,
     )
 
     component_status = {
