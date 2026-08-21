@@ -55,6 +55,50 @@ def _component_status(value: Any, fields: Iterable[str]) -> str:
     return "partial"
 
 
+def _safe_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number and number not in {float("inf"), float("-inf")} else None
+
+
+def _normalize_indicator_values(values: Dict[str, Any]) -> Dict[str, Any]:
+    """Backfill execution evidence from already-fetched TradingView indicators.
+
+    This performs no provider call. It exists so ATR% and relative-volume coverage do
+    not depend on one provider naming a pre-computed ratio exactly the way Scanner
+    expects.
+    """
+
+    normalized = dict(values or {})
+    close = _safe_float(normalized.get("close"))
+    atr = _safe_float(normalized.get("atr"))
+    if _safe_float(normalized.get("atr_pct")) is None and close and close > 0 and atr is not None:
+        normalized["atr_pct"] = round(atr / close, 8)
+
+    volume = _safe_float(normalized.get("volume"))
+    volume_ma = _safe_float(normalized.get("volume_ma"))
+    if (
+        _safe_float(normalized.get("volume_ratio")) is None
+        and volume is not None
+        and volume_ma is not None
+        and volume_ma > 0
+    ):
+        normalized["volume_ratio"] = round(volume / volume_ma, 8)
+    return normalized
+
+
+def _backfill_bundle_opportunity_inputs(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    enriched = dict(bundle)
+    technical = dict(enriched.get("technical") or {})
+    indicators = _normalize_indicator_values(dict(technical.get("indicator_values") or {}))
+    if technical or indicators:
+        technical["indicator_values"] = indicators
+        enriched["technical"] = technical
+    return enriched
+
+
 def _synthetic_yfinance_info(details: Dict[str, Any]) -> Dict[str, Any]:
     scanner_details = details.get("scanner_v50") or {}
     fundamental = scanner_details.get("fundamental") or {}
@@ -67,6 +111,16 @@ def _synthetic_yfinance_info(details: Dict[str, Any]) -> Dict[str, Any]:
     if info.get("regularMarketPrice") is None and market_rank.get("price") is not None:
         info["regularMarketPrice"] = market_rank.get("price")
     return info
+
+
+def _attach_profile(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = _backfill_bundle_opportunity_inputs(bundle)
+    profile = build_opportunity_profile(normalized)
+    normalized["opportunity_profile"] = profile
+    quality = dict(normalized.get("data_quality") or {})
+    quality["opportunity_evidence"] = profile.get("evidence_quality") or {}
+    normalized["data_quality"] = quality
+    return normalized
 
 
 def build_fundamental_data_bundle(
@@ -131,15 +185,14 @@ def build_fundamental_data_bundle(
             },
         },
     }
-    bundle["opportunity_profile"] = build_opportunity_profile(bundle)
-    return bundle
+    return _attach_profile(bundle)
 
 
 def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[str, Any]:
     """Build a source-aware bundle for a candidate already selected by Scanner."""
 
     scanner_details = details.get("scanner_v50") or {}
-    technical = scanner_details.get("indicator_values") or {}
+    technical = _normalize_indicator_values(scanner_details.get("indicator_values") or {})
     market_rank = scanner_details.get("market_rank") or {}
     fundamental = scanner_details.get("fundamental") or {}
     sector_rotation = scanner_details.get("sector_rotation") or {}
@@ -226,8 +279,7 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
             "market_missing_fields": (market_snapshot.get("data_quality") or {}).get("missing_fields", []),
         },
     }
-    bundle["opportunity_profile"] = build_opportunity_profile(bundle)
-    return bundle
+    return _attach_profile(bundle)
 
 
 def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -238,13 +290,15 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
         return metadata
     existing_bundle = details.get("data_bundle")
     if isinstance(existing_bundle, dict):
-        if isinstance(existing_bundle.get("opportunity_profile"), dict):
+        normalized_bundle = _backfill_bundle_opportunity_inputs(existing_bundle)
+        existing_profile = normalized_bundle.get("opportunity_profile")
+        if isinstance(existing_profile, dict) and normalized_bundle == existing_bundle:
             return metadata
         enriched = dict(metadata)
         enriched_details = dict(details)
-        enriched_bundle = dict(existing_bundle)
-        enriched_bundle["opportunity_profile"] = build_opportunity_profile(enriched_bundle)
-        enriched_details["data_bundle"] = enriched_bundle
+        if not isinstance(existing_profile, dict):
+            normalized_bundle = _attach_profile(normalized_bundle)
+        enriched_details["data_bundle"] = normalized_bundle
         enriched["details"] = enriched_details
         return enriched
     if not isinstance(details.get("scanner_v50"), dict):
@@ -276,7 +330,6 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
                 ],
             },
         }
-        fallback_bundle["opportunity_profile"] = build_opportunity_profile(fallback_bundle)
-        enriched_details["data_bundle"] = fallback_bundle
+        enriched_details["data_bundle"] = _attach_profile(fallback_bundle)
     enriched["details"] = enriched_details
     return enriched
