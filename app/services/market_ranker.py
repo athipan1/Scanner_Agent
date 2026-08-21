@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import pandas as pd
 import yfinance as yf
 
 from app.utils.yfinance_frames import extract_yfinance_series
@@ -22,6 +23,7 @@ class MarketRankResult:
     return_20d: Optional[float]
     return_60d: Optional[float]
     volume_ratio: Optional[float]
+    atr_pct: Optional[float]
     trend_score: Optional[float]
     reason: List[str]
 
@@ -34,9 +36,10 @@ def _safe_float(value) -> Optional[float]:
     try:
         if value is None:
             return None
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if pd.notna(number) else None
 
 
 def _pct_return(start: Optional[float], end: Optional[float]) -> Optional[float]:
@@ -61,6 +64,45 @@ def _score_volume_ratio(value: Optional[float]) -> float:
     return _clamp01(value / 3.0)
 
 
+def _atr_pct_from_history(
+    close_series,
+    high_series,
+    low_series,
+    last_price: Optional[float],
+) -> Optional[float]:
+    if (
+        last_price is None
+        or last_price <= 0
+        or close_series.empty
+        or high_series.empty
+        or low_series.empty
+    ):
+        return None
+    frame = pd.concat(
+        {
+            "close": close_series,
+            "high": high_series,
+            "low": low_series,
+        },
+        axis=1,
+    ).dropna()
+    if len(frame) < 15:
+        return None
+    previous_close = frame["close"].shift(1)
+    true_range = pd.concat(
+        [
+            frame["high"] - frame["low"],
+            (frame["high"] - previous_close).abs(),
+            (frame["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = _safe_float(true_range.tail(14).mean())
+    if atr is None or atr <= 0:
+        return None
+    return atr / last_price
+
+
 @lru_cache(maxsize=10000)
 def rank_symbol(symbol: str) -> MarketRankResult:
     symbol = symbol.upper().strip()
@@ -75,45 +117,50 @@ def rank_symbol(symbol: str) -> MarketRankResult:
             auto_adjust=True,
         )
         close_series = extract_yfinance_series(history, "Close", symbol)
+        high_series = extract_yfinance_series(history, "High", symbol)
+        low_series = extract_yfinance_series(history, "Low", symbol)
         volume_values = extract_yfinance_series(history, "Volume", symbol)
         volume_series = None if volume_values.empty else volume_values
     except Exception as exc:
         return MarketRankResult(
-            symbol,
-            0.0,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            [f"Market Ranking error: {exc}"],
+            symbol=symbol,
+            score=0.0,
+            price=None,
+            return_5d=None,
+            return_20d=None,
+            return_60d=None,
+            volume_ratio=None,
+            atr_pct=None,
+            trend_score=None,
+            reason=[f"Market Ranking error: {exc}"],
         )
 
     if close_series.empty:
         return MarketRankResult(
-            symbol,
-            0.0,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            ["ไม่มีข้อมูลราคาเพียงพอสำหรับ Market Ranking"],
+            symbol=symbol,
+            score=0.0,
+            price=None,
+            return_5d=None,
+            return_20d=None,
+            return_60d=None,
+            volume_ratio=None,
+            atr_pct=None,
+            trend_score=None,
+            reason=["ไม่มีข้อมูลราคาเพียงพอสำหรับ Market Ranking"],
         )
 
     if len(close_series) < 30:
         return MarketRankResult(
-            symbol,
-            0.0,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            ["ข้อมูลราคาน้อยเกินไปสำหรับ Market Ranking"],
+            symbol=symbol,
+            score=0.0,
+            price=None,
+            return_5d=None,
+            return_20d=None,
+            return_60d=None,
+            volume_ratio=None,
+            atr_pct=None,
+            trend_score=None,
+            reason=["ข้อมูลราคาน้อยเกินไปสำหรับ Market Ranking"],
         )
 
     last_price = _safe_float(close_series.iloc[-1])
@@ -130,16 +177,8 @@ def rank_symbol(symbol: str) -> MarketRankResult:
         last_price,
     )
 
-    ma20 = (
-        _safe_float(close_series.tail(20).mean())
-        if len(close_series) >= 20
-        else None
-    )
-    ma50 = (
-        _safe_float(close_series.tail(50).mean())
-        if len(close_series) >= 50
-        else None
-    )
+    ma20 = _safe_float(close_series.tail(20).mean()) if len(close_series) >= 20 else None
+    ma50 = _safe_float(close_series.tail(50).mean()) if len(close_series) >= 50 else None
     trend_parts = []
     if last_price is not None and ma20 is not None:
         trend_parts.append(1.0 if last_price > ma20 else 0.35)
@@ -161,6 +200,15 @@ def rank_symbol(symbol: str) -> MarketRankResult:
                 reasons.append(
                     f"Volume ล่าสุดสูงกว่าค่าเฉลี่ย ({volume_ratio:.2f}x)"
                 )
+
+    atr_pct = _atr_pct_from_history(
+        close_series,
+        high_series,
+        low_series,
+        last_price,
+    )
+    if atr_pct is not None:
+        reasons.append(f"ATR14 coverage พร้อมใช้งาน ({atr_pct:.2%})")
 
     score = _clamp01(
         (_score_return(ret_5d, -0.06, 0.12) * 0.15)
@@ -185,6 +233,7 @@ def rank_symbol(symbol: str) -> MarketRankResult:
         return_20d=ret_20d,
         return_60d=ret_60d,
         volume_ratio=volume_ratio,
+        atr_pct=round(atr_pct, 6) if atr_pct is not None else None,
         trend_score=round(trend_score, 4),
         reason=reasons,
     )
@@ -209,6 +258,7 @@ def rank_market_symbols(
             "return_20d": result.return_20d,
             "return_60d": result.return_60d,
             "volume_ratio": result.volume_ratio,
+            "atr_pct": result.atr_pct,
             "trend_score": result.trend_score,
             "reason": result.reason,
         }
