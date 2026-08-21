@@ -132,12 +132,12 @@ def _positive_price(*values: Any) -> Optional[float]:
 
 @lru_cache(maxsize=512)
 def _yfinance_execution_history(yf_symbol: str) -> Dict[str, Any]:
-    """Return cached daily execution evidence used when live indicators omit ATR.
+    """Return cached daily execution evidence for Scanner candidate enrichment.
 
     ATR is computed from true range over the latest 14 valid daily bars. This is a
-    provider-backed fallback, not a synthetic volatility guess. The cache avoids one
-    history download per enrichment path when the same symbol is evaluated repeatedly
-    in one Scanner process.
+    provider-backed fallback, not a synthetic volatility guess. Callers opt in so
+    generic market snapshots that already reuse yfinance info keep their no-extra-
+    provider-call contract.
     """
 
     try:
@@ -177,9 +177,7 @@ def _yfinance_execution_history(yf_symbol: str) -> Dict[str, Any]:
         if not closes:
             return {"_error": "history_has_no_valid_close"}
 
-        result: Dict[str, Any] = {
-            "historyBarCount": len(closes),
-        }
+        result: Dict[str, Any] = {"historyBarCount": len(closes)}
         if len(true_ranges) >= 14:
             atr14 = sum(true_ranges[-14:]) / 14.0
             result["historicalAtr14"] = round(atr14, 8)
@@ -274,12 +272,7 @@ def classify_quote_quality(
     observed_at: Optional[datetime] = None,
     stale_after_seconds: int = DEFAULT_QUOTE_STALE_AFTER_SECONDS,
 ) -> Dict[str, Any]:
-    """Classify quote freshness without treating a closed US session as a provider failure.
-
-    ``marketState`` from yfinance is preferred when present because it can represent
-    holidays and exceptional closures. The weekday/time clock is an explicit fallback
-    and never grants broker authority; Manager remains the downstream gate owner.
-    """
+    """Classify quote freshness without treating a closed US session as a provider failure."""
 
     observed = _coerce_utc_datetime(observed_at) or datetime.now(timezone.utc)
     is_us_equity = _is_us_equity_exchange(requested_exchange, provider_exchange)
@@ -377,13 +370,14 @@ def get_market_snapshot(
     symbol: str,
     exchange: str = "SET",
     yfinance_info: Optional[Dict[str, Any]] = None,
+    *,
+    include_execution_history: bool = False,
 ) -> Dict[str, Any]:
     """Fetch a resilient, provenance-aware market and company snapshot.
 
-    Missing optional fields never discard a candidate. Instead, the response
-    records field coverage and provider failures so Manager_Agent can distinguish
-    incomplete data from a genuinely weak investment signal. A closed US market or
-    stale quote is classified as evidence state, not as a provider/workflow error.
+    ``include_execution_history`` is deliberately opt-in. Candidate enrichment uses
+    it to backfill ATR evidence, while generic callers that already supplied
+    yfinance info retain the existing no-extra-provider-call behavior.
     """
 
     clean_symbol = str(symbol or "").upper().strip()
@@ -530,7 +524,7 @@ def get_market_snapshot(
                 "averageVolume10days", "yfinance_info"
             )
 
-    if _is_us_equity_exchange(exchange, snapshot.get("exchange")):
+    if include_execution_history and _is_us_equity_exchange(exchange, snapshot.get("exchange")):
         execution_history = dict(_yfinance_execution_history(yf_symbol))
         history_error = execution_history.pop("_error", None)
         if history_error:
