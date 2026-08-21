@@ -130,6 +130,76 @@ def _positive_price(*values: Any) -> Optional[float]:
     return None
 
 
+@lru_cache(maxsize=512)
+def _yfinance_execution_history(yf_symbol: str) -> Dict[str, Any]:
+    """Return cached daily execution evidence used when live indicators omit ATR.
+
+    ATR is computed from true range over the latest 14 valid daily bars. This is a
+    provider-backed fallback, not a synthetic volatility guess. The cache avoids one
+    history download per enrichment path when the same symbol is evaluated repeatedly
+    in one Scanner process.
+    """
+
+    try:
+        history = yf.Ticker(yf_symbol).history(
+            period="45d",
+            interval="1d",
+            auto_adjust=False,
+        )
+        if history is None or getattr(history, "empty", True):
+            return {"_error": "empty_history"}
+
+        true_ranges: list[float] = []
+        closes: list[float] = []
+        volumes: list[float] = []
+        previous_close: Optional[float] = None
+        for _, row in history.iterrows():
+            high = _safe_number(row.get("High"))
+            low = _safe_number(row.get("Low"))
+            close = _safe_number(row.get("Close"))
+            volume = _safe_number(row.get("Volume"))
+            if high is None or low is None or close is None or close <= 0:
+                continue
+            true_range = high - low
+            if previous_close is not None:
+                true_range = max(
+                    true_range,
+                    abs(high - previous_close),
+                    abs(low - previous_close),
+                )
+            if true_range >= 0:
+                true_ranges.append(true_range)
+            closes.append(close)
+            if volume is not None and volume >= 0:
+                volumes.append(volume)
+            previous_close = close
+
+        if not closes:
+            return {"_error": "history_has_no_valid_close"}
+
+        result: Dict[str, Any] = {
+            "historyBarCount": len(closes),
+        }
+        if len(true_ranges) >= 14:
+            atr14 = sum(true_ranges[-14:]) / 14.0
+            result["historicalAtr14"] = round(atr14, 8)
+            result["historicalAtrPct"] = round(atr14 / closes[-1], 8)
+        if volumes:
+            recent_volumes = volumes[-20:]
+            result["historicalAverageVolume20d"] = round(
+                sum(recent_volumes) / len(recent_volumes),
+                4,
+            )
+        return result
+    except Exception as exc:
+        logger.warning(
+            "Error fetching execution history for %s from yfinance: %s",
+            yf_symbol,
+            exc,
+        )
+        return {"_error": str(exc)[:300]}
+
+
 def _first_value(mapping: Any, names: Iterable[str]) -> Any:
     for name in names:
         try:
@@ -459,6 +529,30 @@ def get_market_snapshot(
             field_sources["averageVolume"] = field_sources.get(
                 "averageVolume10days", "yfinance_info"
             )
+
+    if _is_us_equity_exchange(exchange, snapshot.get("exchange")):
+        execution_history = dict(_yfinance_execution_history(yf_symbol))
+        history_error = execution_history.pop("_error", None)
+        if history_error:
+            provider_status["yfinance_history"] = "error"
+            provider_errors.append(
+                {
+                    "provider": "yfinance",
+                    "stage": "execution_history",
+                    "error": str(history_error)[:300],
+                }
+            )
+        elif execution_history:
+            provider_status["yfinance_history"] = "success"
+            sources.append("yfinance_execution_history")
+            for key, value in execution_history.items():
+                snapshot[key] = value
+                field_sources[key] = "yfinance_execution_history"
+            if snapshot.get("averageVolume") is None and snapshot.get(
+                "historicalAverageVolume20d"
+            ) is not None:
+                snapshot["averageVolume"] = snapshot["historicalAverageVolume20d"]
+                field_sources["averageVolume"] = "yfinance_execution_history"
 
     quote_quality = classify_quote_quality(
         requested_exchange=exchange,
