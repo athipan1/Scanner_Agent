@@ -84,6 +84,36 @@ def test_market_closed_is_review_not_workflow_failure():
     assert "market_closed" in profile["reasons"]
 
 
+def test_market_closed_unusable_spread_is_still_review_not_workflow_failure():
+    bundle = strong_bundle()
+    bundle["market_snapshot"].update(
+        {
+            "quoteQualityStatus": "market_closed",
+            "usMarketSession": "closed",
+            "usMarketOpen": False,
+            "alpacaBidPrice": 0.0,
+            "alpacaAskPrice": 0.0,
+            "alpacaSpreadBps": None,
+            "quote_quality": {
+                "status": "market_closed",
+                "market_session": "closed",
+                "market_open": False,
+                "quote_age_seconds": 3600.0,
+            },
+        }
+    )
+
+    profile = build_opportunity_profile(bundle)
+
+    assert profile["status"] == "review"
+    assert profile["workflow_status"] == "market_closed"
+    assert profile["fail_closed"] is False
+    assert profile["evidence_quality"]["spread_structurally_valid"] is False
+    assert "market_closed" in profile["reasons"]
+    assert "bid_invalid" in profile["reasons"]
+    assert "ask_invalid" in profile["reasons"]
+
+
 def test_stale_regular_session_quote_is_review_not_failure():
     bundle = strong_bundle()
     bundle["market_snapshot"]["quoteQualityStatus"] = "stale_quote"
@@ -101,6 +131,32 @@ def test_stale_regular_session_quote_is_review_not_failure():
     assert profile["workflow_status"] == "stale_quote"
     assert profile["fail_closed"] is False
     assert "stale_quote" in profile["reasons"]
+
+
+def test_stale_quote_with_crossed_spread_is_review_not_workflow_failure():
+    bundle = strong_bundle()
+    bundle["market_snapshot"].update(
+        {
+            "quoteQualityStatus": "stale_quote",
+            "alpacaQuoteAgeSeconds": 900.0,
+            "alpacaBidPrice": 100.10,
+            "alpacaAskPrice": 100.00,
+            "quote_quality": {
+                "status": "stale_quote",
+                "market_session": "regular",
+                "market_open": True,
+                "quote_age_seconds": 900.0,
+            },
+        }
+    )
+
+    profile = build_opportunity_profile(bundle)
+
+    assert profile["status"] == "review"
+    assert profile["workflow_status"] == "stale_quote"
+    assert profile["fail_closed"] is False
+    assert profile["evidence_quality"]["spread_structurally_valid"] is False
+    assert "crossed_quote_invalid" in profile["reasons"]
 
 
 def test_liquid_stock_spread_must_stay_inside_sanity_bound():
