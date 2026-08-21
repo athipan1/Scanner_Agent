@@ -218,6 +218,7 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
     average_volume = _first_number(
         market.get("averageVolume"),
         market.get("averageVolume10days"),
+        market.get("historicalAverageVolume20d"),
     )
     dollar_volume = (
         current_price * average_volume
@@ -231,6 +232,7 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
     atr_pct = _first_number(
         indicators.get("atr_pct"),
         market_rank.get("atr_pct"),
+        market.get("historicalAtrPct"),
     )
     if atr_pct is None:
         atr = _finite(indicators.get("atr"))
