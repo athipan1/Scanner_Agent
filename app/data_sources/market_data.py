@@ -1,8 +1,9 @@
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from functools import lru_cache
 from typing import Any, Dict, Iterable, Optional
+from zoneinfo import ZoneInfo
 
 import yfinance as yf
 from alpaca.data.historical import StockHistoricalDataClient
@@ -23,9 +24,11 @@ _INFO_FIELDS = (
     "quoteType",
     "currency",
     "exchange",
+    "marketState",
     "averageVolume",
     "averageVolume10days",
     "averageDailyVolume10Day",
+    "regularMarketVolume",
     "trailingPE",
     "forwardPE",
     "pegRatio",
@@ -74,6 +77,26 @@ _PLACEHOLDER_KEYS = {
     "YOUR_APCA_API_SECRET_KEY",
 }
 
+_US_EQUITY_EXCHANGES = {
+    "AMEX",
+    "ARCA",
+    "BATS",
+    "IEX",
+    "NASDAQ",
+    "NGM",
+    "NMS",
+    "NYSE",
+    "NYQ",
+    "PCX",
+}
+_US_EASTERN = ZoneInfo("America/New_York")
+_US_REGULAR_OPEN = time(9, 30)
+_US_REGULAR_CLOSE = time(16, 0)
+_US_PREMARKET_OPEN = time(4, 0)
+_US_AFTER_HOURS_CLOSE = time(20, 0)
+DEFAULT_QUOTE_STALE_AFTER_SECONDS = 300
+MAX_FUTURE_QUOTE_SKEW_SECONDS = 60
+
 
 @lru_cache(maxsize=1)
 def _alpaca_client() -> StockHistoricalDataClient:
@@ -119,6 +142,125 @@ def _first_value(mapping: Any, names: Iterable[str]) -> Any:
         if value is not None:
             return value
     return None
+
+
+def _coerce_utc_datetime(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _is_us_equity_exchange(*values: Any) -> bool:
+    return any(str(value or "").strip().upper() in _US_EQUITY_EXCHANGES for value in values)
+
+
+def _clock_market_session(observed_at: datetime) -> str:
+    eastern = observed_at.astimezone(_US_EASTERN)
+    if eastern.weekday() >= 5:
+        return "closed"
+    local_time = eastern.time().replace(tzinfo=None)
+    if _US_REGULAR_OPEN <= local_time < _US_REGULAR_CLOSE:
+        return "regular"
+    if _US_PREMARKET_OPEN <= local_time < _US_REGULAR_OPEN:
+        return "premarket"
+    if _US_REGULAR_CLOSE <= local_time < _US_AFTER_HOURS_CLOSE:
+        return "after_hours"
+    return "closed"
+
+
+def _normalize_market_state(value: Any) -> Optional[str]:
+    state = str(value or "").strip().upper()
+    if state in {"REGULAR", "OPEN"}:
+        return "regular"
+    if state in {"PRE", "PREPRE"}:
+        return "premarket"
+    if state in {"POST", "POSTPOST"}:
+        return "after_hours"
+    if state in {"CLOSED", "CLOSE"}:
+        return "closed"
+    return None
+
+
+def classify_quote_quality(
+    *,
+    requested_exchange: str,
+    provider_exchange: Any = None,
+    market_state: Any = None,
+    quote_timestamp: Any = None,
+    observed_at: Optional[datetime] = None,
+    stale_after_seconds: int = DEFAULT_QUOTE_STALE_AFTER_SECONDS,
+) -> Dict[str, Any]:
+    """Classify quote freshness without treating a closed US session as a provider failure.
+
+    ``marketState`` from yfinance is preferred when present because it can represent
+    holidays and exceptional closures. The weekday/time clock is an explicit fallback
+    and never grants broker authority; Manager remains the downstream gate owner.
+    """
+
+    observed = _coerce_utc_datetime(observed_at) or datetime.now(timezone.utc)
+    is_us_equity = _is_us_equity_exchange(requested_exchange, provider_exchange)
+    if not is_us_equity:
+        return {
+            "status": "not_applicable",
+            "quote_is_fresh": None,
+            "quote_age_seconds": None,
+            "market_session": "not_applicable",
+            "market_open": None,
+            "session_source": "not_applicable",
+            "stale_after_seconds": max(1, int(stale_after_seconds)),
+        }
+
+    provider_session = _normalize_market_state(market_state)
+    session = provider_session or _clock_market_session(observed)
+    session_source = "provider_market_state" if provider_session else "weekday_clock"
+    parsed_quote = _coerce_utc_datetime(quote_timestamp)
+    quote_age_seconds = None
+    if parsed_quote is not None:
+        quote_age_seconds = round((observed - parsed_quote).total_seconds(), 3)
+
+    threshold = max(1, int(stale_after_seconds))
+    if session != "regular":
+        status = "market_closed"
+        quote_is_fresh = False
+    elif parsed_quote is None:
+        status = "missing_quote_timestamp"
+        quote_is_fresh = False
+    elif quote_age_seconds is None:
+        status = "stale_quote"
+        quote_is_fresh = False
+    elif quote_age_seconds < -MAX_FUTURE_QUOTE_SKEW_SECONDS:
+        status = "stale_quote"
+        quote_is_fresh = False
+    elif quote_age_seconds > threshold:
+        status = "stale_quote"
+        quote_is_fresh = False
+    else:
+        status = "fresh"
+        quote_is_fresh = True
+
+    return {
+        "status": status,
+        "quote_is_fresh": quote_is_fresh,
+        "quote_age_seconds": quote_age_seconds,
+        "market_session": session,
+        "market_open": session == "regular",
+        "session_source": session_source,
+        "stale_after_seconds": threshold,
+    }
 
 
 def _group_status(snapshot: Dict[str, Any], fields: Iterable[str]) -> Dict[str, Any]:
@@ -170,16 +312,18 @@ def get_market_snapshot(
 
     Missing optional fields never discard a candidate. Instead, the response
     records field coverage and provider failures so Manager_Agent can distinguish
-    incomplete data from a genuinely weak investment signal.
+    incomplete data from a genuinely weak investment signal. A closed US market or
+    stale quote is classified as evidence state, not as a provider/workflow error.
     """
 
     clean_symbol = str(symbol or "").upper().strip()
     yf_symbol = map_symbol_for_yfinance(clean_symbol, exchange)
+    observed_at = datetime.now(timezone.utc)
     snapshot: Dict[str, Any] = {
         "symbol": clean_symbol,
         "yf_symbol": yf_symbol,
         "requested_exchange": exchange,
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "fetched_at": observed_at.isoformat(),
     }
     sources = []
     provider_errors = []
@@ -210,14 +354,18 @@ def get_market_snapshot(
                     spread = ask_price - bid_price
                     snapshot["alpacaMidpoint"] = midpoint
                     snapshot["alpacaSpread"] = spread
-                    snapshot["alpacaSpreadBps"] = round((spread / midpoint) * 10_000, 4) if midpoint > 0 else None
+                    snapshot["alpacaSpreadBps"] = (
+                        round((spread / midpoint) * 10_000, 4) if midpoint > 0 else None
+                    )
                 price = _positive_price(ask_price, bid_price, midpoint)
                 if price is not None:
                     snapshot["currentPrice"] = price
                     field_sources["currentPrice"] = "alpaca_latest_quote"
-                quote_timestamp = getattr(quote, "timestamp", None)
+                quote_timestamp = _coerce_utc_datetime(getattr(quote, "timestamp", None))
                 if quote_timestamp is not None:
-                    snapshot["alpacaQuoteTimestamp"] = str(quote_timestamp)
+                    snapshot["alpacaQuoteTimestamp"] = quote_timestamp.isoformat()
+                elif getattr(quote, "timestamp", None) is not None:
+                    snapshot["alpacaQuoteTimestamp"] = str(getattr(quote, "timestamp"))
                 sources.append("alpaca_latest_quote")
                 provider_status["alpaca"] = "success"
             else:
@@ -271,6 +419,7 @@ def get_market_snapshot(
     fast_field_map = {
         "previousClose": ("previous_close", "previousClose"),
         "regularMarketPrice": ("last_price", "lastPrice"),
+        "regularMarketVolume": ("last_volume", "lastVolume"),
         "dayHigh": ("day_high", "dayHigh"),
         "dayLow": ("day_low", "dayLow"),
         "fiftyTwoWeekHigh": ("year_high", "yearHigh"),
@@ -297,7 +446,9 @@ def get_market_snapshot(
         )
         if price is not None:
             snapshot["currentPrice"] = price
-            field_sources["currentPrice"] = field_sources.get("regularMarketPrice", "yfinance_info")
+            field_sources["currentPrice"] = field_sources.get(
+                "regularMarketPrice", "yfinance_info"
+            )
 
     if snapshot.get("averageVolume") is None:
         fallback_volume = _safe_number(
@@ -305,7 +456,22 @@ def get_market_snapshot(
         )
         if fallback_volume is not None:
             snapshot["averageVolume"] = fallback_volume
-            field_sources["averageVolume"] = field_sources.get("averageVolume10days", "yfinance_info")
+            field_sources["averageVolume"] = field_sources.get(
+                "averageVolume10days", "yfinance_info"
+            )
+
+    quote_quality = classify_quote_quality(
+        requested_exchange=exchange,
+        provider_exchange=snapshot.get("exchange"),
+        market_state=snapshot.get("marketState"),
+        quote_timestamp=snapshot.get("alpacaQuoteTimestamp"),
+        observed_at=observed_at,
+    )
+    snapshot["quote_quality"] = quote_quality
+    snapshot["quoteQualityStatus"] = quote_quality["status"]
+    snapshot["alpacaQuoteAgeSeconds"] = quote_quality["quote_age_seconds"]
+    snapshot["usMarketSession"] = quote_quality["market_session"]
+    snapshot["usMarketOpen"] = quote_quality["market_open"]
 
     valuation_metric_count = sum(snapshot.get(key) is not None for key in _CORE_VALUATION_KEYS)
     snapshot.update(
