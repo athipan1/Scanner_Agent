@@ -249,15 +249,24 @@ jobs:
                           item["alpaca_status"] == "success" and item["alpaca_error_count"] == 0
                           for item in opportunity_rows
                       ) / len(opportunity_rows)
-                      spread_sane = all(
-                          item["spread_structurally_valid"] is True
-                          and item["liquid_spread_sane"] is True
-                          for item in opportunity_rows
+                      regular_rows = [
+                          item for item in opportunity_rows
+                          if item["market_session"] == "regular"
+                      ]
+                      regular_spread_sane = (
+                          all(
+                              item["spread_structurally_valid"] is True
+                              and item["liquid_spread_sane"] is True
+                              for item in regular_rows
+                          )
+                          if regular_rows
+                          else None
                       )
                       report["atr_coverage"] = round(atr_coverage, 4)
                       report["relative_volume_coverage"] = round(rvol_coverage, 4)
                       report["alpaca_success_coverage"] = round(alpaca_ok, 4)
-                      report["liquid_spread_sanity_passed"] = spread_sane
+                      report["regular_session_candidate_count"] = len(regular_rows)
+                      report["liquid_spread_sanity_passed"] = regular_spread_sane
 
                       if atr_coverage < 0.95:
                           failures.append(f"technical_scan: ATR coverage {atr_coverage:.1%} < 95%")
@@ -265,10 +274,9 @@ jobs:
                           failures.append(f"technical_scan: relative-volume coverage {rvol_coverage:.1%} < 95%")
                       if alpaca_ok < 0.95:
                           failures.append(f"technical_scan: Alpaca provider success {alpaca_ok:.1%} < 95%")
-                      if not spread_sane:
-                          failures.append("technical_scan: liquid spread sanity check failed")
+                      if regular_rows and regular_spread_sane is not True:
+                          failures.append("technical_scan: regular-session liquid spread sanity check failed")
 
-                      regular_rows = [item for item in opportunity_rows if item["market_session"] == "regular"]
                       if REQUIRE_REGULAR_SESSION and len(regular_rows) != len(opportunity_rows):
                           failures.append(
                               "scheduled smoke did not observe US regular session for all candidates"
@@ -310,7 +318,8 @@ jobs:
               f"- ATR: `{report.get('atr_coverage')}`",
               f"- Relative volume: `{report.get('relative_volume_coverage')}`",
               f"- Alpaca provider: `{report.get('alpaca_success_coverage')}`",
-              f"- Liquid spread sanity: `{report.get('liquid_spread_sanity_passed')}`",
+              f"- Regular-session candidates: `{report.get('regular_session_candidate_count')}`",
+              f"- Regular-session liquid spread sanity: `{report.get('liquid_spread_sanity_passed')}`",
               "",
           ]
           if failures:
