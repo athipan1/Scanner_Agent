@@ -61,11 +61,12 @@ def complete_snapshot():
 def test_builds_complete_bundle_and_reuses_existing_fundamental_values(monkeypatch):
     captured = {}
 
-    def fake_snapshot(symbol, exchange, yfinance_info):
+    def fake_snapshot(symbol, exchange, yfinance_info, include_execution_history=False):
         captured.update(
             symbol=symbol,
             exchange=exchange,
             yfinance_info=yfinance_info,
+            include_execution_history=include_execution_history,
         )
         return complete_snapshot()
 
@@ -84,13 +85,14 @@ def test_builds_complete_bundle_and_reuses_existing_fundamental_values(monkeypat
     assert captured["yfinance_info"]["marketCap"] == 3_000_000_000_000
     assert captured["yfinance_info"]["returnOnAssets"] == 0.24
     assert captured["yfinance_info"]["regularMarketPrice"] == 100.0
+    assert captured["include_execution_history"] is True
 
 
 def test_enriches_scanner_v5_metadata_without_mutating_source(monkeypatch):
     monkeypatch.setattr(
         enrichment,
         "get_market_snapshot",
-        lambda symbol, exchange, yfinance_info: complete_snapshot(),
+        lambda symbol, exchange, yfinance_info, include_execution_history=False: complete_snapshot(),
     )
     original = {"details": scanner_details()}
 
@@ -105,7 +107,7 @@ def test_candidate_result_contract_attaches_data_bundle(monkeypatch):
     monkeypatch.setattr(
         enrichment,
         "get_market_snapshot",
-        lambda symbol, exchange, yfinance_info: complete_snapshot(),
+        lambda symbol, exchange, yfinance_info, include_execution_history=False: complete_snapshot(),
     )
 
     candidate = CandidateResult(
