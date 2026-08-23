@@ -42,6 +42,8 @@ _STATEMENT_COVERAGE_FIELDS = {
     "quarterly_cash_flow": "has_quarterly_cash_flow",
 }
 
+_ANALYSIS_READY_COMPONENTS = ("technical", "market_rank")
+
 
 def _component_status(value: Any, fields: Iterable[str]) -> str:
     if not isinstance(value, dict):
@@ -53,6 +55,33 @@ def _component_status(value: Any, fields: Iterable[str]) -> str:
     if len(available) == len(required):
         return "complete"
     return "partial"
+
+
+def _coverage_scope(
+    component_status: Dict[str, str],
+    components: Iterable[str],
+) -> Dict[str, Any]:
+    names = list(components)
+    complete = [name for name in names if component_status.get(name) == "complete"]
+    partial = [name for name in names if component_status.get(name) == "partial"]
+    missing = [name for name in names if component_status.get(name) == "missing"]
+    weighted_available = len(complete) + (0.5 * len(partial))
+    coverage_ratio = round(weighted_available / len(names), 4) if names else 0.0
+    status = (
+        "complete"
+        if names and not partial and not missing
+        else "partial"
+        if complete or partial
+        else "missing"
+    )
+    return {
+        "status": status,
+        "coverage_ratio": coverage_ratio,
+        "required_components": names,
+        "complete_components": complete,
+        "partial_components": partial,
+        "missing_components": missing,
+    }
 
 
 def _safe_float(value: Any) -> float | None:
@@ -232,11 +261,8 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
         "backtest": _component_status(backtest, ("score",)),
     }
 
-    complete = [name for name, status in component_status.items() if status == "complete"]
-    partial = [name for name, status in component_status.items() if status == "partial"]
-    missing = [name for name, status in component_status.items() if status == "missing"]
-    weighted_available = len(complete) + (0.5 * len(partial))
-    coverage_ratio = round(weighted_available / len(component_status), 4)
+    overall_quality = _coverage_scope(component_status, component_status.keys())
+    analysis_quality = _coverage_scope(component_status, _ANALYSIS_READY_COMPONENTS)
 
     sources = ["tradingview"]
     for source in market_snapshot.get("market_data_sources") or []:
@@ -269,12 +295,18 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
         "sector_rotation": sector_rotation,
         "backtest": backtest,
         "data_quality": {
-            "status": "complete" if not partial and not missing else "partial" if complete or partial else "missing",
-            "coverage_ratio": coverage_ratio,
+            "status": overall_quality["status"],
+            "coverage_ratio": overall_quality["coverage_ratio"],
+            "coverage_scope": "full_enrichment",
+            "analysis": {
+                **analysis_quality,
+                "coverage_scope": "analysis_ready",
+                "purpose": "pre_downstream_technical_fundamental_handoff",
+            },
             "component_status": component_status,
-            "complete_components": complete,
-            "partial_components": partial,
-            "missing_components": missing,
+            "complete_components": overall_quality["complete_components"],
+            "partial_components": overall_quality["partial_components"],
+            "missing_components": overall_quality["missing_components"],
             "market_provider_status": market_snapshot.get("provider_status") or {},
             "market_provider_errors": market_snapshot.get("provider_errors") or [],
             "market_missing_fields": (market_snapshot.get("data_quality") or {}).get("missing_fields", []),
@@ -318,6 +350,17 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
             "data_quality": {
                 "status": "partial",
                 "coverage_ratio": 0.0,
+                "coverage_scope": "full_enrichment",
+                "analysis": {
+                    "status": "missing",
+                    "coverage_ratio": 0.0,
+                    "coverage_scope": "analysis_ready",
+                    "purpose": "pre_downstream_technical_fundamental_handoff",
+                    "required_components": list(_ANALYSIS_READY_COMPONENTS),
+                    "complete_components": [],
+                    "partial_components": [],
+                    "missing_components": list(_ANALYSIS_READY_COMPONENTS),
+                },
                 "component_status": {"market": "missing"},
                 "complete_components": [],
                 "partial_components": [],
