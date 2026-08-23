@@ -24,7 +24,8 @@ def build_candidate_score_inputs(data_bundle: Mapping[str, Any]) -> Dict[str, An
     """Project Scanner evidence consumed by Manager's candidate-score.v1.
 
     This contract is advisory only. It exposes already-collected evidence and
-    never grants Risk, Execution, or broker authority.
+    never grants Risk, Execution, or broker authority. Relative-strength evidence
+    is considered scoreable only when the symbol has explicit benchmark returns.
     """
 
     bundle = _mapping(data_bundle)
@@ -51,9 +52,34 @@ def build_candidate_score_inputs(data_bundle: Mapping[str, Any]) -> Dict[str, An
     return_20d = _finite(market_rank.get("return_20d"))
     return_60d = _finite(market_rank.get("return_60d"))
     trend_score = _finite(market_rank.get("trend_score"))
+    benchmark_return_20d = _finite(market_rank.get("benchmark_return_20d"))
+    benchmark_return_60d = _finite(market_rank.get("benchmark_return_60d"))
+    relative_return_20d = _finite(market_rank.get("relative_return_20d"))
+    relative_return_60d = _finite(market_rank.get("relative_return_60d"))
+    outperforming_benchmark = market_rank.get("outperforming_benchmark")
+    if not isinstance(outperforming_benchmark, bool):
+        outperforming_benchmark = None
+    benchmark_symbol = str(market_rank.get("benchmark_symbol") or "").strip() or None
 
     technical_coverage = [close, sma50, sma200]
-    market_strength_coverage = [market_rank_score, return_20d, return_60d]
+    market_strength_coverage = [
+        return_20d,
+        return_60d,
+        benchmark_return_20d,
+        benchmark_return_60d,
+        relative_return_20d,
+        relative_return_60d,
+    ]
+
+    universe_proxy = (
+        market_rank_score >= 0.65
+        and (return_20d or 0) > 0
+        and (return_60d or 0) > 0
+        if market_rank_score is not None
+        and return_20d is not None
+        and return_60d is not None
+        else None
+    )
 
     return {
         "schema_version": CANDIDATE_SCORE_INPUTS_VERSION,
@@ -75,16 +101,21 @@ def build_candidate_score_inputs(data_bundle: Mapping[str, Any]) -> Dict[str, An
             "return_20d": return_20d,
             "return_60d": return_60d,
             "trend_score": trend_score,
-            "stronger_than_universe_proxy": (
-                market_rank_score >= 0.65
-                and (return_20d or 0) > 0
-                and (return_60d or 0) > 0
-                if market_rank_score is not None
-                and return_20d is not None
-                and return_60d is not None
-                else None
+            "benchmark_symbol": benchmark_symbol,
+            "benchmark_return_20d": benchmark_return_20d,
+            "benchmark_return_60d": benchmark_return_60d,
+            "relative_return_20d": relative_return_20d,
+            "relative_return_60d": relative_return_60d,
+            "outperforming_benchmark": outperforming_benchmark,
+            "stronger_than_universe_proxy": universe_proxy,
+            "method": (
+                "benchmark_relative_returns"
+                if outperforming_benchmark is not None
+                and relative_return_20d is not None
+                and relative_return_60d is not None
+                and benchmark_symbol is not None
+                else "unavailable"
             ),
-            "method": "scanner_market_rank_universe_proxy",
         },
         "opportunity": {
             "schema_version": profile.get("schema_version"),
