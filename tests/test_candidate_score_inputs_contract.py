@@ -23,6 +23,12 @@ def test_scanner_contract_preserves_candidate_score_inputs_in_data_bundle():
                         "return_60d": 0.20,
                         "volume_ratio": 1.4,
                         "trend_score": 0.9,
+                        "benchmark_symbol": "SPY",
+                        "benchmark_return_20d": 0.03,
+                        "benchmark_return_60d": 0.08,
+                        "relative_return_20d": 0.05,
+                        "relative_return_60d": 0.12,
+                        "outperforming_benchmark": True,
                     },
                     "opportunity_profile": {
                         "schema_version": "scanner-opportunity-profile.v1",
@@ -48,5 +54,8 @@ def test_scanner_contract_preserves_candidate_score_inputs_in_data_bundle():
     assert inputs["schema_version"] == "candidate-score-inputs.v1"
     assert inputs["technical"]["price_above_sma200"] is True
     assert inputs["technical"]["sma50_above_sma200"] is True
+    assert inputs["market_strength"]["outperforming_benchmark"] is True
+    assert inputs["market_strength"]["relative_strength_passed"] is True
+    assert inputs["market_strength"]["method"] == "benchmark_relative_returns"
     assert inputs["market_strength"]["stronger_than_universe_proxy"] is True
     assert inputs["authority"]["broker_order_authorized"] is False
