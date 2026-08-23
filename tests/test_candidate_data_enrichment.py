@@ -228,6 +228,17 @@ def test_provider_failure_is_reported_without_dropping_candidate(monkeypatch):
     )
 
     bundle = result["details"]["data_bundle"]
-    assert bundle["data_quality"]["status"] == "partial"
-    assert bundle["data_quality"]["missing_components"] == ["market"]
-    assert bundle["data_quality"]["market_provider_errors"][0]["provider"] == "enrichment"
+    quality = bundle["data_quality"]
+    assert quality["status"] == "partial"
+    assert quality["missing_components"] == ["market", "technical"]
+    assert quality["analysis"]["coverage_ratio"] == 0.0
+    assert quality["analysis"]["missing_components"] == ["technical"]
+    assert quality["analysis"]["missing_fields"] == [
+        "close",
+        "rsi",
+        "macd",
+        "sma50",
+        "sma200",
+        "atr",
+    ]
+    assert quality["market_provider_errors"][0]["provider"] == "enrichment"
