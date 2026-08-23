@@ -47,10 +47,12 @@ def test_candidate_score_inputs_projects_scanner_evidence_without_authority():
     assert result["technical"]["price_above_sma200"] is True
     assert result["technical"]["sma50_above_sma200"] is True
     assert result["market_strength"]["outperforming_benchmark"] is True
+    assert result["market_strength"]["relative_strength_passed"] is True
     assert result["market_strength"]["relative_return_20d"] == 0.05
     assert result["market_strength"]["relative_return_60d"] == 0.10
     assert result["market_strength"]["method"] == "benchmark_relative_returns"
     assert result["market_strength"]["stronger_than_universe_proxy"] is True
+    assert result["market_strength"]["universe_rank_proxy"] is True
     assert result["technical"]["relative_volume"] == 1.4
     assert result["authority"]["broker_order_authorized"] is False
     assert result["authority"]["risk_approval_allowed"] is False
@@ -85,8 +87,10 @@ def test_universe_rank_alone_cannot_claim_benchmark_relative_strength():
         }
     )
 
-    assert result["market_strength"]["stronger_than_universe_proxy"] is True
+    assert result["market_strength"]["universe_rank_proxy"] is True
+    assert result["market_strength"]["stronger_than_universe_proxy"] is None
     assert result["market_strength"]["outperforming_benchmark"] is None
+    assert result["market_strength"]["relative_strength_passed"] is None
     assert result["market_strength"]["method"] == "unavailable"
 
 
