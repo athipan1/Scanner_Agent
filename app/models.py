@@ -18,6 +18,31 @@ def utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _attach_candidate_score_inputs(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach non-binding candidate-score inputs to an existing data bundle."""
+
+    from app.services.candidate_score_inputs import build_candidate_score_inputs
+
+    if not isinstance(metadata, dict):
+        return metadata
+    details = metadata.get("details")
+    if not isinstance(details, dict):
+        return metadata
+    bundle = details.get("data_bundle")
+    if not isinstance(bundle, dict):
+        return metadata
+
+    enriched = dict(metadata)
+    enriched_details = dict(details)
+    enriched_bundle = dict(bundle)
+    enriched_bundle["candidate_score_inputs"] = build_candidate_score_inputs(
+        enriched_bundle
+    )
+    enriched_details["data_bundle"] = enriched_bundle
+    enriched["details"] = enriched_details
+    return enriched
+
+
 class ScanRequest(BaseModel):
     symbols: Optional[List[str]] = Field(default=None, description="A list of stock symbols to scan. Defaults to a predefined list if empty.")
     screener: str = Field(default="thailand", description="The TradingView screener to use (e.g., 'thailand', 'america').")
@@ -95,6 +120,11 @@ class CandidateResult(BaseModel):
         self.metadata = enrich_candidate_metadata(self.symbol, self.metadata)
         return self
 
+    @model_validator(mode="after")
+    def populate_candidate_score_inputs(self):
+        self.metadata = _attach_candidate_score_inputs(self.metadata)
+        return self
+
 
 class ScannerCandidateContract(BaseModel):
     """
@@ -130,6 +160,11 @@ class ScannerCandidateContract(BaseModel):
         enriched = enrich_candidate_metadata_with_bucket_hints(candidate_context, self.metadata)
         self.metadata = enriched
         self.bucket_hint = StrategyBucketHintContract.model_validate(enriched)
+        return self
+
+    @model_validator(mode="after")
+    def populate_candidate_score_inputs(self):
+        self.metadata = _attach_candidate_score_inputs(self.metadata)
         return self
 
 
