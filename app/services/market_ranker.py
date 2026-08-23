@@ -12,6 +12,7 @@ from app.utils.yfinance_frames import extract_yfinance_series
 
 MAX_SYMBOLS_AFTER_RANKING = 75
 MIN_RANKED_SYMBOLS = 30
+RELATIVE_STRENGTH_BENCHMARK = "SPY"
 
 
 @dataclass
@@ -46,6 +47,24 @@ def _pct_return(start: Optional[float], end: Optional[float]) -> Optional[float]
     if start is None or end is None or start == 0:
         return None
     return (end - start) / start
+
+
+def _relative_return(
+    symbol_return: Optional[float],
+    benchmark_return: Optional[float],
+) -> Optional[float]:
+    if symbol_return is None or benchmark_return is None:
+        return None
+    return symbol_return - benchmark_return
+
+
+def _outperforming_benchmark(
+    relative_20d: Optional[float],
+    relative_60d: Optional[float],
+) -> Optional[bool]:
+    if relative_20d is None or relative_60d is None:
+        return None
+    return relative_20d > 0 and relative_60d > 0
 
 
 def _score_return(
@@ -250,8 +269,16 @@ def rank_market_symbols(
     else:
         selected = ranked[:MAX_SYMBOLS_AFTER_RANKING]
 
-    metadata = {
-        result.symbol: {
+    benchmark = rank_symbol(RELATIVE_STRENGTH_BENCHMARK)
+    benchmark_20d = benchmark.return_20d
+    benchmark_60d = benchmark.return_60d
+
+    metadata: Dict[str, Dict[str, object]] = {}
+    for result in results:
+        relative_20d = _relative_return(result.return_20d, benchmark_20d)
+        relative_60d = _relative_return(result.return_60d, benchmark_60d)
+        outperforming = _outperforming_benchmark(relative_20d, relative_60d)
+        metadata[result.symbol] = {
             "market_rank_score": result.score,
             "price": result.price,
             "return_5d": result.return_5d,
@@ -260,8 +287,18 @@ def rank_market_symbols(
             "volume_ratio": result.volume_ratio,
             "atr_pct": result.atr_pct,
             "trend_score": result.trend_score,
+            "benchmark_symbol": RELATIVE_STRENGTH_BENCHMARK,
+            "benchmark_return_20d": benchmark_20d,
+            "benchmark_return_60d": benchmark_60d,
+            "relative_return_20d": (
+                round(relative_20d, 8) if relative_20d is not None else None
+            ),
+            "relative_return_60d": (
+                round(relative_60d, 8) if relative_60d is not None else None
+            ),
+            "outperforming_benchmark": outperforming,
+            "relative_strength_method": "benchmark_relative_returns",
             "reason": result.reason,
         }
-        for result in results
-    }
+
     return [result.symbol for result in selected], metadata
