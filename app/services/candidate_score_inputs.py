@@ -25,7 +25,7 @@ def build_candidate_score_inputs(data_bundle: Mapping[str, Any]) -> Dict[str, An
 
     This contract is advisory only. It exposes already-collected evidence and
     never grants Risk, Execution, or broker authority. Relative-strength evidence
-    is considered scoreable only when the symbol has explicit benchmark returns.
+    is scoreable only when the symbol has explicit benchmark-relative returns.
     """
 
     bundle = _mapping(data_bundle)
@@ -71,7 +71,7 @@ def build_candidate_score_inputs(data_bundle: Mapping[str, Any]) -> Dict[str, An
         relative_return_60d,
     ]
 
-    universe_proxy = (
+    universe_rank_proxy = (
         market_rank_score >= 0.65
         and (return_20d or 0) > 0
         and (return_60d or 0) > 0
@@ -79,6 +79,17 @@ def build_candidate_score_inputs(data_bundle: Mapping[str, Any]) -> Dict[str, An
         and return_20d is not None
         and return_60d is not None
         else None
+    )
+    benchmark_evidence_available = (
+        outperforming_benchmark is not None
+        and relative_return_20d is not None
+        and relative_return_60d is not None
+        and benchmark_return_20d is not None
+        and benchmark_return_60d is not None
+        and benchmark_symbol is not None
+    )
+    scoreable_relative_strength = (
+        outperforming_benchmark if benchmark_evidence_available else None
     )
 
     return {
@@ -106,14 +117,15 @@ def build_candidate_score_inputs(data_bundle: Mapping[str, Any]) -> Dict[str, An
             "benchmark_return_60d": benchmark_return_60d,
             "relative_return_20d": relative_return_20d,
             "relative_return_60d": relative_return_60d,
-            "outperforming_benchmark": outperforming_benchmark,
-            "stronger_than_universe_proxy": universe_proxy,
+            "outperforming_benchmark": scoreable_relative_strength,
+            "relative_strength_passed": scoreable_relative_strength,
+            "universe_rank_proxy": universe_rank_proxy,
+            # Compatibility alias used by the first Manager consumer. The key
+            # name is retained, but its scoreable value is now benchmark-safe.
+            "stronger_than_universe_proxy": scoreable_relative_strength,
             "method": (
                 "benchmark_relative_returns"
-                if outperforming_benchmark is not None
-                and relative_return_20d is not None
-                and relative_return_60d is not None
-                and benchmark_symbol is not None
+                if benchmark_evidence_available
                 else "unavailable"
             ),
         },
