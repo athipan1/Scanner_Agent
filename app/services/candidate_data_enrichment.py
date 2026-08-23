@@ -42,7 +42,14 @@ _STATEMENT_COVERAGE_FIELDS = {
     "quarterly_cash_flow": "has_quarterly_cash_flow",
 }
 
-_ANALYSIS_READY_COMPONENTS = ("technical", "market_rank")
+_ANALYSIS_READY_TECHNICAL_FIELDS = (
+    "close",
+    "rsi",
+    "macd",
+    "sma50",
+    "sma200",
+    "atr",
+)
 
 
 def _component_status(value: Any, fields: Iterable[str]) -> str:
@@ -81,6 +88,54 @@ def _coverage_scope(
         "complete_components": complete,
         "partial_components": partial,
         "missing_components": missing,
+    }
+
+
+def _field_coverage_scope(
+    value: Dict[str, Any],
+    fields: Iterable[str],
+    *,
+    component: str,
+) -> Dict[str, Any]:
+    """Measure analysis readiness at field granularity.
+
+    ``market_rank`` is a discovery/ranking enrichment and is intentionally not a
+    prerequisite for explicit-symbol technical scans. The pre-analysis contract is
+    based on the technical fields actually needed to justify downstream analysis.
+    One missing field is visible (5/6 = 0.8333) rather than collapsing the whole
+    technical component to a coarse 0.5 score.
+    """
+
+    required_fields = list(fields)
+    payload = value if isinstance(value, dict) else {}
+    available_fields = [
+        field for field in required_fields if payload.get(field) is not None
+    ]
+    missing_fields = [
+        field for field in required_fields if payload.get(field) is None
+    ]
+    coverage_ratio = (
+        round(len(available_fields) / len(required_fields), 4)
+        if required_fields
+        else 0.0
+    )
+    status = (
+        "complete"
+        if required_fields and not missing_fields
+        else "partial"
+        if available_fields
+        else "missing"
+    )
+    return {
+        "status": status,
+        "coverage_ratio": coverage_ratio,
+        "required_components": [component],
+        "complete_components": [component] if status == "complete" else [],
+        "partial_components": [component] if status == "partial" else [],
+        "missing_components": [component] if status == "missing" else [],
+        "required_fields": required_fields,
+        "available_fields": available_fields,
+        "missing_fields": missing_fields,
     }
 
 
@@ -239,7 +294,7 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
         "market": (market_snapshot.get("data_quality") or {}).get("status", "missing"),
         "technical": _component_status(
             technical,
-            ("close", "rsi", "macd", "sma50", "sma200", "atr"),
+            _ANALYSIS_READY_TECHNICAL_FIELDS,
         ),
         "market_rank": _component_status(
             market_rank,
@@ -262,7 +317,11 @@ def build_candidate_data_bundle(symbol: str, details: Dict[str, Any]) -> Dict[st
     }
 
     overall_quality = _coverage_scope(component_status, component_status.keys())
-    analysis_quality = _coverage_scope(component_status, _ANALYSIS_READY_COMPONENTS)
+    analysis_quality = _field_coverage_scope(
+        technical,
+        _ANALYSIS_READY_TECHNICAL_FIELDS,
+        component="technical",
+    )
 
     sources = ["tradingview"]
     for source in market_snapshot.get("market_data_sources") or []:
@@ -356,15 +415,18 @@ def enrich_candidate_metadata(symbol: str, metadata: Dict[str, Any]) -> Dict[str
                     "coverage_ratio": 0.0,
                     "coverage_scope": "analysis_ready",
                     "purpose": "pre_downstream_technical_fundamental_handoff",
-                    "required_components": list(_ANALYSIS_READY_COMPONENTS),
+                    "required_components": ["technical"],
                     "complete_components": [],
                     "partial_components": [],
-                    "missing_components": list(_ANALYSIS_READY_COMPONENTS),
+                    "missing_components": ["technical"],
+                    "required_fields": list(_ANALYSIS_READY_TECHNICAL_FIELDS),
+                    "available_fields": [],
+                    "missing_fields": list(_ANALYSIS_READY_TECHNICAL_FIELDS),
                 },
-                "component_status": {"market": "missing"},
+                "component_status": {"market": "missing", "technical": "missing"},
                 "complete_components": [],
                 "partial_components": [],
-                "missing_components": ["market"],
+                "missing_components": ["market", "technical"],
                 "market_provider_errors": [
                     {
                         "provider": "enrichment",
