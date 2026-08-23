@@ -76,8 +76,11 @@ def test_builds_complete_bundle_and_reuses_existing_fundamental_values(monkeypat
     assert bundle["schema_version"] == "scanner-data-bundle.v1"
     assert bundle["data_quality"]["status"] == "complete"
     assert bundle["data_quality"]["coverage_ratio"] == 1.0
-    assert bundle["data_quality"]["analysis"]["coverage_ratio"] == 1.0
-    assert bundle["data_quality"]["analysis"]["coverage_scope"] == "analysis_ready"
+    analysis = bundle["data_quality"]["analysis"]
+    assert analysis["coverage_ratio"] == 1.0
+    assert analysis["coverage_scope"] == "analysis_ready"
+    assert analysis["required_components"] == ["technical"]
+    assert analysis["missing_fields"] == []
     assert bundle["data_quality"]["missing_components"] == []
     assert "tradingview" in bundle["sources"]
     assert "alpaca_latest_quote" in bundle["sources"]
@@ -105,19 +108,35 @@ def test_analysis_ready_coverage_ignores_optional_downstream_enrichment(monkeypa
 
     assert quality["coverage_ratio"] == 0.6667
     assert quality["missing_components"] == ["sector_rotation", "backtest"]
-    assert quality["analysis"] == {
-        "status": "complete",
-        "coverage_ratio": 1.0,
-        "required_components": ["technical", "market_rank"],
-        "complete_components": ["technical", "market_rank"],
-        "partial_components": [],
-        "missing_components": [],
-        "coverage_scope": "analysis_ready",
-        "purpose": "pre_downstream_technical_fundamental_handoff",
-    }
+    analysis = quality["analysis"]
+    assert analysis["status"] == "complete"
+    assert analysis["coverage_ratio"] == 1.0
+    assert analysis["required_components"] == ["technical"]
+    assert analysis["complete_components"] == ["technical"]
+    assert analysis["partial_components"] == []
+    assert analysis["missing_components"] == []
+    assert analysis["missing_fields"] == []
+    assert analysis["coverage_scope"] == "analysis_ready"
 
 
-def test_analysis_ready_coverage_exposes_real_technical_gap(monkeypatch):
+def test_explicit_symbol_scan_does_not_require_market_rank_for_analysis(monkeypatch):
+    monkeypatch.setattr(
+        enrichment,
+        "get_market_snapshot",
+        lambda symbol, exchange, yfinance_info, include_execution_history=False: complete_snapshot(),
+    )
+    details = scanner_details()
+    details["scanner_v50"]["market_rank"] = {}
+
+    bundle = enrichment.build_candidate_data_bundle("AAPL", details)
+    quality = bundle["data_quality"]
+
+    assert quality["component_status"]["market_rank"] == "missing"
+    assert quality["analysis"]["coverage_ratio"] == 1.0
+    assert quality["analysis"]["status"] == "complete"
+
+
+def test_one_missing_technical_field_is_measured_precisely(monkeypatch):
     monkeypatch.setattr(
         enrichment,
         "get_market_snapshot",
@@ -130,9 +149,28 @@ def test_analysis_ready_coverage_exposes_real_technical_gap(monkeypatch):
     analysis = bundle["data_quality"]["analysis"]
 
     assert analysis["status"] == "partial"
-    assert analysis["coverage_ratio"] == 0.75
+    assert analysis["coverage_ratio"] == 0.8333
     assert analysis["partial_components"] == ["technical"]
-    assert analysis["missing_components"] == []
+    assert analysis["missing_fields"] == ["atr"]
+
+
+def test_two_missing_technical_fields_expose_real_below_threshold_gap(monkeypatch):
+    monkeypatch.setattr(
+        enrichment,
+        "get_market_snapshot",
+        lambda symbol, exchange, yfinance_info, include_execution_history=False: complete_snapshot(),
+    )
+    details = scanner_details()
+    details["scanner_v50"]["indicator_values"].pop("atr")
+    details["scanner_v50"]["indicator_values"].pop("sma200")
+
+    bundle = enrichment.build_candidate_data_bundle("AAPL", details)
+    analysis = bundle["data_quality"]["analysis"]
+
+    assert analysis["status"] == "partial"
+    assert analysis["coverage_ratio"] == 0.6667
+    assert analysis["partial_components"] == ["technical"]
+    assert analysis["missing_fields"] == ["sma200", "atr"]
 
 
 def test_enriches_scanner_v5_metadata_without_mutating_source(monkeypatch):
