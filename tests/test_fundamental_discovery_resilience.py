@@ -18,9 +18,9 @@ def test_diversified_symbols_round_robin_across_initials():
     ]
 
 
-def test_discovery_universe_fails_degraded_to_large_cap_fallback(monkeypatch):
-    monkeypatch.setattr(fundamental_discovery, "load_sp500_symbols", lambda: [])
-    monkeypatch.setattr(fundamental_discovery, "load_nasdaq100_symbols", lambda: [])
+def test_discovery_universe_stays_degraded_while_using_healthy_listed_fill(monkeypatch):
+    monkeypatch.setattr(fundamental_discovery, "load_sp500_symbols", lambda: ["MSFT"])
+    monkeypatch.setattr(fundamental_discovery, "load_nasdaq100_symbols", lambda: ["NVDA"])
     monkeypatch.setattr(
         fundamental_discovery,
         "load_nasdaq_listed_symbols",
@@ -28,34 +28,54 @@ def test_discovery_universe_fails_degraded_to_large_cap_fallback(monkeypatch):
     )
     monkeypatch.setattr(
         fundamental_discovery,
-        "US_LARGE_CAP_FALLBACK",
-        ["MSFT"],
-    )
-    monkeypatch.setattr(
-        fundamental_discovery,
-        "US_GROWTH_UNIVERSE",
-        ["NVDA"],
+        "get_universe_source_status",
+        lambda: {
+            "sp500": {
+                "source": "static_large_cap_priority_fallback",
+                "fallback_used": True,
+                "effective_count": 1,
+                "error": "RuntimeError: benchmark page unavailable",
+            },
+            "nasdaq100": {
+                "source": "static_growth_priority_fallback",
+                "fallback_used": True,
+                "effective_count": 1,
+                "error": "RuntimeError: benchmark page unavailable",
+            },
+            "nasdaq_listed": {
+                "source": "nasdaq_trader",
+                "fallback_used": False,
+                "effective_count": 6,
+                "error": None,
+            },
+        },
     )
 
     result = fundamental_discovery.build_us_fundamental_universe(max_universe=7)
 
-    assert result["symbols"] == ["MSFT", "NVDA"]
+    assert result["symbols"] == ["MSFT", "NVDA", "AA", "BA", "CA", "AB", "BB"]
     assert result["sources"]["sp500_fallback_used"] is True
     assert result["sources"]["nasdaq100_fallback_used"] is True
     assert result["sources"]["benchmark_sources_complete"] is False
     assert result["sources"]["universe_degraded"] is True
-    assert result["sources"]["broad_listed_fill_enabled"] is False
+    assert result["sources"]["broad_listed_fill_enabled"] is True
     assert result["sources"]["universe_degraded_reasons"] == [
-        "sp500_source_unavailable",
-        "nasdaq100_source_unavailable",
+        "sp500_static_priority_fallback",
+        "nasdaq100_static_priority_fallback",
     ]
     assert result["sources"]["selection_order"] == (
-        "degraded_large_cap_fallback_only"
+        "degraded_priority_then_round_robin_listed_fill"
     )
-    assert result["sources"]["selected_initial_coverage"] == ["M", "N"]
+    assert result["sources"]["selected_initial_coverage"] == [
+        "A",
+        "B",
+        "C",
+        "M",
+        "N",
+    ]
 
 
-def test_discovery_universe_uses_broad_fill_only_when_benchmarks_are_healthy(
+def test_discovery_universe_uses_broad_fill_when_benchmarks_are_healthy(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -72,6 +92,30 @@ def test_discovery_universe_uses_broad_fill_only_when_benchmarks_are_healthy(
         fundamental_discovery,
         "load_nasdaq_listed_symbols",
         lambda: ["AA", "AB", "BA", "BB", "CA", "CB"],
+    )
+    monkeypatch.setattr(
+        fundamental_discovery,
+        "get_universe_source_status",
+        lambda: {
+            "sp500": {
+                "source": "wikipedia_live",
+                "fallback_used": False,
+                "effective_count": 1,
+                "error": None,
+            },
+            "nasdaq100": {
+                "source": "wikipedia_live",
+                "fallback_used": False,
+                "effective_count": 1,
+                "error": None,
+            },
+            "nasdaq_listed": {
+                "source": "nasdaq_trader",
+                "fallback_used": False,
+                "effective_count": 6,
+                "error": None,
+            },
+        },
     )
 
     result = fundamental_discovery.build_us_fundamental_universe(max_universe=7)
