@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from functools import lru_cache
 import re
-from typing import Iterable, List
+from typing import Any, Dict, Iterable, List
 
 import pandas as pd
 
@@ -44,6 +44,30 @@ _NON_COMMON_SECURITY_PATTERNS = (
     re.compile(r"\bbonds?\b", re.IGNORECASE),
     re.compile(r"\bdebentures?\b", re.IGNORECASE),
 )
+
+_SOURCE_STATUS: Dict[str, Dict[str, Any]] = {}
+
+
+def _record_source_status(
+    name: str,
+    *,
+    source: str,
+    fallback_used: bool,
+    effective_count: int,
+    error: str | None = None,
+) -> None:
+    _SOURCE_STATUS[name] = {
+        "source": source,
+        "fallback_used": fallback_used,
+        "effective_count": int(effective_count),
+        "error": error,
+    }
+
+
+def get_universe_source_status() -> Dict[str, Dict[str, Any]]:
+    """Return source provenance for the cached universe loaders."""
+
+    return {name: dict(row) for name, row in _SOURCE_STATUS.items()}
 
 
 def normalize_symbols(symbols: Iterable[str] | None) -> List[str]:
@@ -114,9 +138,7 @@ def _filter_listed_equities(table: pd.DataFrame, symbol_column: str) -> List[str
     if "Market Category" in data.columns:
         data = data[data["Market Category"].notna()]
     if "Security Name" in data.columns:
-        data = data[
-            data["Security Name"].map(_is_common_equity_security_name)
-        ]
+        data = data[data["Security Name"].map(_is_common_equity_security_name)]
     if "Symbol" in data.columns:
         data = data[
             ~data["Symbol"].astype(str).str.startswith("File Creation Time", na=False)
@@ -129,8 +151,22 @@ def _filter_listed_equities(table: pd.DataFrame, symbol_column: str) -> List[str
 def load_nasdaq_listed_symbols() -> List[str]:
     try:
         table = _read_nasdaq_trader_file("nasdaqlisted.txt")
-        return _filter_listed_equities(table, "Symbol")
-    except Exception:
+        symbols = _filter_listed_equities(table, "Symbol")
+        _record_source_status(
+            "nasdaq_listed",
+            source="nasdaq_trader",
+            fallback_used=False,
+            effective_count=len(symbols),
+        )
+        return symbols
+    except Exception as exc:
+        _record_source_status(
+            "nasdaq_listed",
+            source="unavailable",
+            fallback_used=False,
+            effective_count=0,
+            error=f"{type(exc).__name__}: {exc}",
+        )
         return []
 
 
@@ -139,37 +175,94 @@ def load_other_listed_symbols() -> List[str]:
     try:
         table = _read_nasdaq_trader_file("otherlisted.txt")
         if "ACT Symbol" in table.columns:
-            return _filter_listed_equities(table, "ACT Symbol")
+            symbols = _filter_listed_equities(table, "ACT Symbol")
+            _record_source_status(
+                "other_listed",
+                source="nasdaq_trader",
+                fallback_used=False,
+                effective_count=len(symbols),
+            )
+            return symbols
+    except Exception as exc:
+        _record_source_status(
+            "other_listed",
+            source="unavailable",
+            fallback_used=False,
+            effective_count=0,
+            error=f"{type(exc).__name__}: {exc}",
+        )
         return []
-    except Exception:
-        return []
+    _record_source_status(
+        "other_listed",
+        source="unavailable",
+        fallback_used=False,
+        effective_count=0,
+    )
+    return []
 
 
 @lru_cache(maxsize=1)
 def load_sp500_symbols() -> List[str]:
+    live_error: str | None = None
     try:
         tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-        symbols = tables[0]["Symbol"].tolist()
-        return normalize_symbols(symbols)
-    except Exception:
-        return []
+        symbols = normalize_symbols(tables[0]["Symbol"].tolist())
+        if len(symbols) >= 400:
+            _record_source_status(
+                "sp500",
+                source="wikipedia_live",
+                fallback_used=False,
+                effective_count=len(symbols),
+            )
+            return symbols
+        live_error = f"partial benchmark membership: {len(symbols)} symbols"
+    except Exception as exc:
+        live_error = f"{type(exc).__name__}: {exc}"
+
+    fallback = list(US_LARGE_CAP_FALLBACK)
+    _record_source_status(
+        "sp500",
+        source="static_large_cap_priority_fallback",
+        fallback_used=True,
+        effective_count=len(fallback),
+        error=live_error,
+    )
+    return fallback
 
 
 @lru_cache(maxsize=1)
 def load_nasdaq100_symbols() -> List[str]:
+    live_error: str | None = None
     try:
         tables = pd.read_html("https://en.wikipedia.org/wiki/Nasdaq-100")
         for table in tables:
             for column in table.columns:
                 column_name = str(column).lower()
                 if "ticker" in column_name or "symbol" in column_name:
-                    symbols = table[column].dropna().astype(str).tolist()
-                    cleaned = normalize_symbols(symbols)
-                    if len(cleaned) >= 80:
-                        return cleaned
-    except Exception:
-        return []
-    return []
+                    symbols = normalize_symbols(
+                        table[column].dropna().astype(str).tolist()
+                    )
+                    if len(symbols) >= 80:
+                        _record_source_status(
+                            "nasdaq100",
+                            source="wikipedia_live",
+                            fallback_used=False,
+                            effective_count=len(symbols),
+                        )
+                        return symbols
+        live_error = "no Nasdaq-100 table with at least 80 symbols"
+    except Exception as exc:
+        live_error = f"{type(exc).__name__}: {exc}"
+
+    fallback = list(US_GROWTH_UNIVERSE)
+    _record_source_status(
+        "nasdaq100",
+        source="static_growth_priority_fallback",
+        fallback_used=True,
+        effective_count=len(fallback),
+        error=live_error,
+    )
+    return fallback
 
 
 @lru_cache(maxsize=1)
