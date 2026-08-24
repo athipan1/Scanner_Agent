@@ -180,9 +180,23 @@ class ScannerContractResult(BaseModel):
 
     @model_validator(mode="after")
     def populate_shadow_lanes(self):
+        from app.services.production_enrichment import (
+            enrich_fundamental_candidates_for_production,
+        )
         from app.services.shadow_lane import partition_candidates_by_lane
 
+        enrichment_summary: Dict[str, Any] = {}
+        if self.scan_type == "best_fundamentals":
+            self.candidates, enrichment_summary = (
+                enrich_fundamental_candidates_for_production(self.candidates)
+            )
+
         production, research, summary = partition_candidates_by_lane(self.candidates)
+        if enrichment_summary:
+            summary = dict(summary)
+            summary["production_enrichment"] = enrichment_summary
+            self.metadata = dict(self.metadata)
+            self.metadata["production_enrichment"] = enrichment_summary
         self.production_candidates = production
         self.research_candidates = research
         self.lane_summary = summary
