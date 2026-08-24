@@ -58,6 +58,12 @@ def test_best_fundamentals_are_hydrated_before_lane_partition(monkeypatch):
                     "return_60d": 0.24,
                     "volume_ratio": 1.5,
                     "trend_score": 0.92,
+                    "benchmark_symbol": "SPY",
+                    "benchmark_return_20d": 0.04,
+                    "benchmark_return_60d": 0.08,
+                    "relative_return_20d": 0.08,
+                    "relative_return_60d": 0.16,
+                    "outperforming_benchmark": True,
                 }
             },
         ),
