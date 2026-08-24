@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 from datetime import datetime, time, timezone
 from functools import lru_cache
 from typing import Any, Dict, Iterable, Optional
@@ -96,6 +97,13 @@ _US_PREMARKET_OPEN = time(4, 0)
 _US_AFTER_HOURS_CLOSE = time(20, 0)
 DEFAULT_QUOTE_STALE_AFTER_SECONDS = 300
 MAX_FUTURE_QUOTE_SKEW_SECONDS = 60
+_SIMULATED_MARKET_ENV = "SCANNER_SIMULATED_MARKET_ENABLED"
+_SIMULATED_MARKET_TRUE_VALUES = {"1", "true", "yes", "on"}
+_SIMULATED_MARKET_DEFAULT_PRICE = 100.0
+_SIMULATED_MARKET_DEFAULT_SPREAD_BPS = 8.0
+_SIMULATED_MARKET_DEFAULT_AVERAGE_VOLUME = 2_500_000.0
+_SIMULATED_MARKET_DEFAULT_REGULAR_VOLUME = 3_000_000.0
+_SIMULATED_MARKET_DEFAULT_ATR_PCT = 0.02
 
 
 @lru_cache(maxsize=1)
@@ -366,6 +374,190 @@ def _build_data_quality(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _simulated_market_requested() -> bool:
+    return str(os.getenv(_SIMULATED_MARKET_ENV, "")).strip().lower() in _SIMULATED_MARKET_TRUE_VALUES
+
+
+def _simulated_market_number(
+    name: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: Optional[float] = None,
+) -> float:
+    raw = os.getenv(name)
+    value = default if raw is None or not str(raw).strip() else _safe_number(raw)
+    if value is None or value < minimum or (maximum is not None and value > maximum):
+        range_text = f"[{minimum}, {maximum}]" if maximum is not None else f">= {minimum}"
+        raise RuntimeError(f"{name} must be finite and within {range_text}")
+    return float(value)
+
+
+def _build_simulated_market_snapshot(
+    *,
+    clean_symbol: str,
+    yf_symbol: str,
+    exchange: str,
+    observed_at: datetime,
+    yfinance_info: Optional[Dict[str, Any]],
+    include_execution_history: bool,
+) -> Dict[str, Any]:
+    """Build deterministic execution evidence for isolated PAPER/dev smoke tests.
+
+    This path intentionally executes before Alpaca/yfinance provider access so a
+    closed market or provider outage cannot prevent downstream integration testing.
+    It is disabled by default and fails closed outside PAPER + SCANNER_DEV_MODE.
+    """
+
+    if str(settings.TRADING_MODE or "").strip().upper() != "PAPER":
+        raise RuntimeError(
+            "SCANNER_SIMULATED_MARKET_ENABLED is allowed only when TRADING_MODE=PAPER"
+        )
+    if not bool(settings.SCANNER_DEV_MODE):
+        raise RuntimeError(
+            "SCANNER_SIMULATED_MARKET_ENABLED requires SCANNER_DEV_MODE=true"
+        )
+    if not _is_us_equity_exchange(exchange):
+        raise RuntimeError(
+            "SCANNER_SIMULATED_MARKET_ENABLED supports US equity exchanges only"
+        )
+
+    info = dict(yfinance_info or {})
+    snapshot: Dict[str, Any] = {
+        "symbol": clean_symbol,
+        "yf_symbol": yf_symbol,
+        "requested_exchange": exchange,
+        "fetched_at": observed_at.isoformat(),
+    }
+    field_sources: Dict[str, str] = {}
+    for key in _INFO_FIELDS:
+        value = info.get(key)
+        if value is not None:
+            snapshot[key] = value
+            field_sources[key] = "reused_yfinance_info"
+
+    price = _positive_price(
+        os.getenv("SCANNER_SIMULATED_MARKET_PRICE"),
+        snapshot.get("currentPrice"),
+        snapshot.get("regularMarketPrice"),
+        snapshot.get("previousClose"),
+    ) or _SIMULATED_MARKET_DEFAULT_PRICE
+    spread_bps = _simulated_market_number(
+        "SCANNER_SIMULATED_MARKET_SPREAD_BPS",
+        _SIMULATED_MARKET_DEFAULT_SPREAD_BPS,
+        minimum=0.0,
+        maximum=50.0,
+    )
+    average_volume = _simulated_market_number(
+        "SCANNER_SIMULATED_MARKET_AVERAGE_VOLUME",
+        _SIMULATED_MARKET_DEFAULT_AVERAGE_VOLUME,
+        minimum=1.0,
+    )
+    regular_volume = _simulated_market_number(
+        "SCANNER_SIMULATED_MARKET_REGULAR_VOLUME",
+        _SIMULATED_MARKET_DEFAULT_REGULAR_VOLUME,
+        minimum=0.0,
+    )
+    atr_pct = _simulated_market_number(
+        "SCANNER_SIMULATED_MARKET_ATR_PCT",
+        _SIMULATED_MARKET_DEFAULT_ATR_PCT,
+        minimum=0.0001,
+        maximum=0.20,
+    )
+
+    half_spread = price * spread_bps / 20_000.0
+    bid = max(0.01, price - half_spread)
+    ask = max(bid, price + half_spread)
+    quote_timestamp = observed_at.isoformat()
+
+    snapshot.update(
+        {
+            "currentPrice": price,
+            "regularMarketPrice": price,
+            "exchange": str(snapshot.get("exchange") or exchange).upper(),
+            "marketState": "REGULAR",
+            "averageVolume": average_volume,
+            "regularMarketVolume": regular_volume,
+            "historicalAtr14": round(price * atr_pct, 8),
+            "historicalAtrPct": round(atr_pct, 8),
+            "historicalAverageVolume20d": average_volume,
+            "historyBarCount": 45 if include_execution_history else 0,
+            "alpacaBidPrice": round(bid, 8),
+            "alpacaAskPrice": round(ask, 8),
+            "alpacaBidSize": 500.0,
+            "alpacaAskSize": 500.0,
+            "alpacaMidpoint": round(price, 8),
+            "alpacaSpread": round(ask - bid, 8),
+            "alpacaSpreadBps": round(spread_bps, 4),
+            "alpacaQuoteTimestamp": quote_timestamp,
+            "simulatedMarket": {
+                "enabled": True,
+                "fixture": "open_us_regular_session",
+                "broker_orders_allowed": False,
+                "provider_calls_bypassed": True,
+            },
+        }
+    )
+
+    simulated_fields = (
+        "currentPrice",
+        "regularMarketPrice",
+        "marketState",
+        "averageVolume",
+        "regularMarketVolume",
+        "historicalAtr14",
+        "historicalAtrPct",
+        "historicalAverageVolume20d",
+        "alpacaBidPrice",
+        "alpacaAskPrice",
+        "alpacaBidSize",
+        "alpacaAskSize",
+        "alpacaMidpoint",
+        "alpacaSpread",
+        "alpacaSpreadBps",
+        "alpacaQuoteTimestamp",
+    )
+    for field in simulated_fields:
+        field_sources[field] = "simulated_market_fixture"
+
+    quote_quality = classify_quote_quality(
+        requested_exchange=exchange,
+        provider_exchange=snapshot.get("exchange"),
+        market_state="REGULAR",
+        quote_timestamp=quote_timestamp,
+        observed_at=observed_at,
+    )
+    snapshot["quote_quality"] = quote_quality
+    snapshot["quoteQualityStatus"] = quote_quality["status"]
+    snapshot["alpacaQuoteAgeSeconds"] = quote_quality["quote_age_seconds"]
+    snapshot["usMarketSession"] = quote_quality["market_session"]
+    snapshot["usMarketOpen"] = quote_quality["market_open"]
+
+    valuation_metric_count = sum(snapshot.get(key) is not None for key in _CORE_VALUATION_KEYS)
+    sources = ["simulated_market_fixture"]
+    if info:
+        sources.insert(0, "reused_yfinance_info")
+    provider_status = {
+        "simulated_market": "success",
+        "alpaca": "bypassed",
+        "yfinance": "reused" if info else "bypassed",
+    }
+    if include_execution_history:
+        provider_status["yfinance_history"] = "bypassed"
+    snapshot.update(
+        {
+            "valuation_metric_count": valuation_metric_count,
+            "valuation_data_complete": valuation_metric_count == len(_CORE_VALUATION_KEYS),
+            "market_data_sources": sources,
+            "provider_status": provider_status,
+            "provider_errors": [],
+            "field_sources": field_sources,
+        }
+    )
+    snapshot["data_quality"] = _build_data_quality(snapshot)
+    return snapshot
+
+
 def get_market_snapshot(
     symbol: str,
     exchange: str = "SET",
@@ -378,11 +570,26 @@ def get_market_snapshot(
     ``include_execution_history`` is deliberately opt-in. Candidate enrichment uses
     it to backfill ATR evidence, while generic callers that already supplied
     yfinance info retain the existing no-extra-provider-call behavior.
+
+    For isolated integration tests only, ``SCANNER_SIMULATED_MARKET_ENABLED=true``
+    creates deterministic US execution evidence before any provider access. The
+    simulation is rejected unless Scanner is running in PAPER + dev mode.
     """
 
     clean_symbol = str(symbol or "").upper().strip()
     yf_symbol = map_symbol_for_yfinance(clean_symbol, exchange)
     observed_at = datetime.now(timezone.utc)
+
+    if _simulated_market_requested():
+        return _build_simulated_market_snapshot(
+            clean_symbol=clean_symbol,
+            yf_symbol=yf_symbol,
+            exchange=exchange,
+            observed_at=observed_at,
+            yfinance_info=yfinance_info,
+            include_execution_history=include_execution_history,
+        )
+
     snapshot: Dict[str, Any] = {
         "symbol": clean_symbol,
         "yf_symbol": yf_symbol,
