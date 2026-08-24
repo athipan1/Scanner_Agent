@@ -15,6 +15,7 @@ from app.universe import (
     US_GROWTH_UNIVERSE,
     US_LARGE_CAP_FALLBACK,
     diversify_symbols_by_initial,
+    get_universe_source_status,
     load_nasdaq100_symbols,
     load_nasdaq_listed_symbols,
     load_sp500_symbols,
@@ -105,41 +106,65 @@ def _initial_coverage(symbols: List[str]) -> List[str]:
 
 
 def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
-    """Build a deterministic US universe and fail degraded to benchmark names.
+    """Build a deterministic US research universe with honest degraded telemetry.
 
-    A broad Nasdaq-listed fill is useful only when both benchmark membership
-    sources are healthy. If either S&P 500 or Nasdaq-100 discovery is unavailable,
-    expanding a small fallback set with hundreds of low-information listed names
-    amplifies provider traffic and can turn transient empty responses into a
-    misleading discovery result. In degraded mode we therefore keep only the
-    large-cap/growth benchmark fallback set and let the next hourly cycle retry the
-    live benchmark sources.
+    Benchmark fallbacks remain priority seeds when live S&P 500 or Nasdaq-100
+    membership is unavailable. A healthy filtered Nasdaq Trader common-equity list
+    may still broaden the research universe toward ``max_universe``. Source health
+    and listed-fill availability are intentionally independent so degraded source
+    provenance never masquerades as a healthy benchmark load, while provider
+    concurrency can remain throttled in degraded mode.
     """
 
-    live_sp500 = load_sp500_symbols()
-    live_nasdaq100 = load_nasdaq100_symbols()
+    sp500 = load_sp500_symbols() or list(US_LARGE_CAP_FALLBACK)
+    nasdaq100 = load_nasdaq100_symbols() or list(US_GROWTH_UNIVERSE)
     nasdaq_listed = load_nasdaq_listed_symbols()
+    source_status = get_universe_source_status()
 
-    sp500 = live_sp500 or list(US_LARGE_CAP_FALLBACK)
-    nasdaq100 = live_nasdaq100 or list(US_GROWTH_UNIVERSE)
+    sp500_status = source_status.get("sp500") or {}
+    nasdaq100_status = source_status.get("nasdaq100") or {}
+    nasdaq_listed_status = source_status.get("nasdaq_listed") or {}
+
+    sp500_fallback_used = bool(sp500_status.get("fallback_used"))
+    nasdaq100_fallback_used = bool(nasdaq100_status.get("fallback_used"))
+    benchmark_sources_complete = bool(sp500) and bool(nasdaq100) and not (
+        sp500_fallback_used or nasdaq100_fallback_used
+    )
+
+    broad_listed_fill_enabled = bool(nasdaq_listed) and (
+        nasdaq_listed_status.get("source") != "unavailable"
+    )
+    universe_degraded = (not benchmark_sources_complete) or (
+        not broad_listed_fill_enabled
+    )
+
+    degraded_reasons: List[str] = []
+    if sp500_fallback_used:
+        degraded_reasons.append("sp500_static_priority_fallback")
+    elif not sp500:
+        degraded_reasons.append("sp500_source_unavailable")
+    if nasdaq100_fallback_used:
+        degraded_reasons.append("nasdaq100_static_priority_fallback")
+    elif not nasdaq100:
+        degraded_reasons.append("nasdaq100_source_unavailable")
+    if not broad_listed_fill_enabled:
+        degraded_reasons.append("nasdaq_listed_source_unavailable")
+
     priority = normalize_symbols(sp500 + nasdaq100)
     priority_set = set(priority)
 
-    benchmark_sources_complete = bool(live_sp500) and bool(live_nasdaq100)
-    degraded_reasons: List[str] = []
-    if not live_sp500:
-        degraded_reasons.append("sp500_source_unavailable")
-    if not live_nasdaq100:
-        degraded_reasons.append("nasdaq100_source_unavailable")
-
-    if benchmark_sources_complete:
+    if broad_listed_fill_enabled:
         listed_fill = diversify_symbols_by_initial(
             symbol for symbol in nasdaq_listed if symbol not in priority_set
         )
-        selection_order = "large_cap_priority_then_round_robin_initial"
+        selection_order = (
+            "degraded_priority_then_round_robin_listed_fill"
+            if universe_degraded
+            else "large_cap_priority_then_round_robin_initial"
+        )
     else:
         listed_fill = []
-        selection_order = "degraded_large_cap_fallback_only"
+        selection_order = "priority_only_listed_source_unavailable"
 
     raw_symbols = normalize_symbols(priority + listed_fill)
     symbols = [symbol for symbol in raw_symbols if _is_discoverable_stock_symbol(symbol)]
@@ -151,15 +176,18 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
     return {
         "symbols": symbols,
         "sources": {
-            "sp500_count": len(live_sp500),
-            "nasdaq100_count": len(live_nasdaq100),
+            "sp500_count": len(sp500),
+            "nasdaq100_count": len(nasdaq100),
             "nasdaq_listed_count": len(nasdaq_listed),
-            "sp500_fallback_used": not bool(live_sp500),
-            "nasdaq100_fallback_used": not bool(live_nasdaq100),
+            "sp500_fallback_used": sp500_fallback_used,
+            "nasdaq100_fallback_used": nasdaq100_fallback_used,
+            "sp500_source": sp500_status.get("source", "unknown"),
+            "nasdaq100_source": nasdaq100_status.get("source", "unknown"),
+            "nasdaq_listed_source": nasdaq_listed_status.get("source", "unknown"),
             "benchmark_sources_complete": benchmark_sources_complete,
-            "universe_degraded": not benchmark_sources_complete,
+            "universe_degraded": universe_degraded,
             "universe_degraded_reasons": degraded_reasons,
-            "broad_listed_fill_enabled": benchmark_sources_complete,
+            "broad_listed_fill_enabled": broad_listed_fill_enabled,
             "requested_max_universe": max_universe,
             "priority_large_cap_count": len(priority),
             "listed_initial_coverage": _initial_coverage(nasdaq_listed),
@@ -168,6 +196,7 @@ def build_us_fundamental_universe(max_universe: int = 1000) -> Dict[str, Any]:
             "listed_security_filter": "common_equity_description_v1",
             "excluded_non_tradable_symbol_count": excluded_count,
             "selected_universe_count": len(symbols),
+            "universe_source_status": source_status,
         },
     }
 
