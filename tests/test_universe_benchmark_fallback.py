@@ -42,17 +42,46 @@ def test_benchmark_page_failure_keeps_effective_priority_and_broad_listed_fill(
 
     result = fundamental_discovery.build_us_fundamental_universe(max_universe=200)
     status = universe.get_universe_source_status()
+    sources = result["sources"]
 
     assert status["sp500"]["fallback_used"] is True
     assert status["sp500"]["source"] == "static_large_cap_priority_fallback"
     assert status["nasdaq100"]["fallback_used"] is True
     assert status["nasdaq100"]["source"] == "static_growth_priority_fallback"
     assert status["nasdaq_listed"]["fallback_used"] is False
-    assert result["sources"]["broad_listed_fill_enabled"] is True
-    assert result["sources"]["selected_universe_count"] == 200
+
+    # Broad research fill may continue, but source health must remain degraded.
+    assert sources["broad_listed_fill_enabled"] is True
+    assert sources["benchmark_sources_complete"] is False
+    assert sources["universe_degraded"] is True
+    assert "sp500_static_priority_fallback" in sources["universe_degraded_reasons"]
+    assert "nasdaq100_static_priority_fallback" in sources["universe_degraded_reasons"]
+    assert sources["selection_order"] == "degraded_priority_then_round_robin_listed_fill"
+    assert sources["selected_universe_count"] == 200
     assert any(symbol.startswith("X") for symbol in result["symbols"])
 
     _clear_universe_caches()
+
+
+def test_degraded_universe_keeps_provider_worker_throttle(monkeypatch):
+    monkeypatch.setattr(
+        fundamental_discovery,
+        "build_us_fundamental_universe",
+        lambda max_universe=1000: {
+            "symbols": [],
+            "sources": {
+                "universe_degraded": True,
+                "broad_listed_fill_enabled": True,
+            },
+        },
+    )
+
+    _, _, metadata = fundamental_discovery.discover_best_fundamentals(max_workers=10)
+
+    assert metadata["universe_degraded"] is True
+    assert metadata["broad_listed_fill_enabled"] is True
+    assert metadata["provider_worker_cap"] == fundamental_discovery._DEGRADED_PROVIDER_WORKERS
+    assert metadata["effective_max_workers"] == fundamental_discovery._DEGRADED_PROVIDER_WORKERS
 
 
 def test_partial_benchmark_tables_do_not_masquerade_as_live_membership(monkeypatch):
