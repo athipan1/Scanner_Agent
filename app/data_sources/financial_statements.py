@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yfinance as yf
@@ -9,12 +10,42 @@ logger = logging.getLogger(__name__)
 
 StatementLoader = Callable[[], Any]
 
+_PROFILE_QUALITY_FIELDS = (
+    "returnOnEquity",
+    "returnOnAssets",
+    "debtToEquity",
+    "profitMargins",
+    "freeCashflow",
+)
+_PROFILE_GROWTH_FIELDS = (
+    "revenueGrowth",
+    "earningsGrowth",
+)
+_PROFILE_VALUATION_FIELDS = (
+    "trailingPE",
+    "forwardPE",
+    "pegRatio",
+    "priceToBook",
+)
+_MIN_PROFILE_QUALITY_FIELDS = 2
+_MIN_PROFILE_TOTAL_FIELDS = 4
+
 
 def _is_empty(statement) -> bool:
     try:
         return statement is None or statement.empty
     except Exception:
         return True
+
+
+def _safe_number(value: Any) -> Optional[float]:
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _first_non_empty_lazy(
@@ -116,11 +147,66 @@ def _get_quarterly_cash_flow(stock, diagnostics=None):
     )
 
 
+def _get_info(stock, diagnostics: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Fetch profile fundamentals once, without treating a missing API as failure."""
+
+    try:
+        getter = getattr(stock, "get_info", None)
+    except AttributeError:
+        getter = None
+    except Exception as exc:
+        diagnostics.append({"stage": "stock_info", "error": str(exc)[:300]})
+        return {}
+
+    try:
+        if callable(getter):
+            value = getter() or {}
+        else:
+            value = getattr(stock, "info", None) or {}
+    except AttributeError:
+        return {}
+    except Exception as exc:
+        diagnostics.append({"stage": "stock_info", "error": str(exc)[:300]})
+        logger.debug("stock.info failed: %s", exc)
+        return {}
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _profile_evidence(info: Dict[str, Any]) -> Dict[str, Any]:
+    quality = [field for field in _PROFILE_QUALITY_FIELDS if _safe_number(info.get(field)) is not None]
+    growth = [field for field in _PROFILE_GROWTH_FIELDS if _safe_number(info.get(field)) is not None]
+    valuation = [field for field in _PROFILE_VALUATION_FIELDS if _safe_number(info.get(field)) is not None]
+    available = list(dict.fromkeys([*quality, *growth, *valuation]))
+    usable = (
+        len(quality) >= _MIN_PROFILE_QUALITY_FIELDS
+        and len(available) >= _MIN_PROFILE_TOTAL_FIELDS
+        and bool(valuation)
+    )
+    return {
+        "usable": usable,
+        "available_fields": available,
+        "quality_fields": quality,
+        "growth_fields": growth,
+        "valuation_fields": valuation,
+        "available_count": len(available),
+        "minimum_quality_fields": _MIN_PROFILE_QUALITY_FIELDS,
+        "minimum_total_fields": _MIN_PROFILE_TOTAL_FIELDS,
+        "requires_valuation_field": True,
+    }
+
+
 def get_financials_with_diagnostics(
     symbol: str,
     exchange: str = "SET",
 ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    """Fetch statements and distinguish missing data from provider failures."""
+    """Fetch statements and preserve real profile evidence as a partial fallback.
+
+    Missing statement frames are no longer an automatic analysis failure when the
+    same yfinance company profile contains enough finite quality and valuation
+    fields. The fallback is explicitly labelled ``profile_fallback`` and all
+    statement coverage flags remain false, so downstream quality gates can remain
+    strict and no financial statement is fabricated.
+    """
 
     provider_errors: List[Dict[str, str]] = []
     yf_symbol = map_symbol_for_yfinance(symbol, exchange)
@@ -155,10 +241,14 @@ def get_financials_with_diagnostics(
     has_annual = has_annual_income or has_annual_cash_flow
     has_quarterly = has_quarterly_income or has_quarterly_cash_flow
 
-    if not has_annual and not has_quarterly:
+    info = _get_info(stock, provider_errors)
+    profile_evidence = _profile_evidence(info)
+    statement_evidence_available = has_annual or has_quarterly
+
+    if not statement_evidence_available and not profile_evidence["usable"]:
         status = "provider_error" if provider_errors else "no_statements"
         logger.warning(
-            "No annual or quarterly financial statements found for %s (%s): %s",
+            "No usable financial statement/profile evidence found for %s (%s): %s",
             symbol,
             yf_symbol,
             status,
@@ -167,15 +257,10 @@ def get_financials_with_diagnostics(
             "status": status,
             "yf_symbol": yf_symbol,
             "provider_errors": provider_errors,
+            "profile_evidence": profile_evidence,
         }
 
-    try:
-        info = stock.info or {}
-    except Exception as exc:
-        provider_errors.append({"stage": "stock_info", "error": str(exc)[:300]})
-        logger.debug("stock.info failed for %s (%s): %s", symbol, yf_symbol, exc)
-        info = {}
-
+    evidence_mode = "financial_statements" if statement_evidence_available else "profile_fallback"
     data = {
         "income_statement": annual_income_statement
         if has_annual_income
@@ -200,16 +285,21 @@ def get_financials_with_diagnostics(
         "has_quarterly_balance_sheet": has_quarterly_balance,
         "yf_symbol": yf_symbol,
         "info": info,
+        "financial_evidence_mode": evidence_mode,
         "financial_provider_diagnostics": {
-            "status": "success",
+            "status": evidence_mode,
             "provider_error_count": len(provider_errors),
             "provider_errors": provider_errors[:5],
+            "profile_evidence": profile_evidence,
+            "statement_evidence_available": statement_evidence_available,
         },
     }
     return data, {
-        "status": "success",
+        "status": evidence_mode,
         "yf_symbol": yf_symbol,
         "provider_errors": provider_errors,
+        "profile_evidence": profile_evidence,
+        "statement_evidence_available": statement_evidence_available,
     }
 
 
