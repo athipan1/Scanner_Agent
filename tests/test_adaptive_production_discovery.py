@@ -112,6 +112,7 @@ def test_discovery_backfills_lower_ranked_production_safe_candidates(monkeypatch
         )
         for rank in range(1, 21)
     ]
+    production_rows = [candidates[11], candidates[14]]
 
     monkeypatch.setattr(
         adaptive,
@@ -130,8 +131,8 @@ def test_discovery_backfills_lower_ranked_production_safe_candidates(monkeypatch
         adaptive,
         "partition_candidates_by_lane",
         lambda rows: (
-            [candidates[11], candidates[14]],
-            [candidate for candidate in rows if candidate not in {candidates[11], candidates[14]}],
+            production_rows,
+            [candidate for candidate in rows if candidate not in production_rows],
             {"production_count": 2},
         ),
     )
