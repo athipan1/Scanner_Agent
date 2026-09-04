@@ -7,6 +7,21 @@ bounded way, and lets strategy-specific opportunity evidence qualify candidates
 without relaxing hard quote/spread safety.
 """
 
+import os
+
+# Production-safe defaults for the cached hourly runtime. Operators can still tune
+# these values explicitly, but the default posture now favors smaller provider
+# batches, longer recovery windows and a second bounded stale-quote refresh before
+# the production opportunity lane is evaluated.
+os.environ.setdefault("SCANNER_FUNDAMENTAL_PROVIDER_BATCH_SIZE", "20")
+os.environ.setdefault("SCANNER_FUNDAMENTAL_RATE_LIMIT_COOLDOWN_SECONDS", "3.0")
+os.environ.setdefault("SCANNER_FUNDAMENTAL_RATE_LIMIT_MAX_COOLDOWN_SECONDS", "12.0")
+os.environ.setdefault("SCANNER_FUNDAMENTAL_RATE_LIMIT_RETRY_ATTEMPTS", "2")
+os.environ.setdefault("SCANNER_FUNDAMENTAL_PROVIDER_CIRCUIT_BREAKER_BATCHES", "5")
+os.environ.setdefault("SCANNER_FUNDAMENTAL_PROVIDER_CANDIDATE_BUFFER_MULTIPLIER", "4")
+os.environ.setdefault("SCANNER_PRODUCTION_STALE_QUOTE_RETRY_ATTEMPTS", "2")
+os.environ.setdefault("SCANNER_PRODUCTION_STALE_QUOTE_RETRY_DELAY_SECONDS", "0.35")
+
 from app import main as _main
 from app.services import production_enrichment as _production_enrichment
 from app.services.adaptive_production_discovery import (
