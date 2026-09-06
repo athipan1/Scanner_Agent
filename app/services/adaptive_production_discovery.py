@@ -337,6 +337,18 @@ def discover_best_fundamentals(
     metadata["production_enrichment"] = enrichment_summary
     metadata["lane_summary_preselection"] = lane_summary
     metadata["adaptive_production_backfill"] = backfill_summary
+    funnel = dict(metadata.get("discovery_funnel") or {})
+    diagnostics = list(funnel.get("rejections") or [])
+    for candidate in ranked_pool:
+        if _candidate_symbol(candidate) not in selected_symbols:
+            diagnostics.append({"symbol": _candidate_symbol(candidate),
+                "score": getattr(candidate, "candidate_score", None), "threshold": normalized_top_n,
+                "gate": "scanner_candidate_selection", "reason_code": "SCANNER_TOP_K_OVERFLOW",
+                "reason": "Outside the production-first candidate limit after enrichment.",
+                "rank": _candidate_rank(candidate), "lane": "discovery"})
+    funnel["rejections"] = diagnostics
+    funnel["scanner_candidate_count"] = len(selected)
+    metadata["discovery_funnel"] = funnel
     return selected, errors, metadata
 
 
