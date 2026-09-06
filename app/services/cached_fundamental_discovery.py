@@ -409,4 +409,6 @@ def discover_best_fundamentals(
         ],
         "diagnostics": _top_diagnostics(top_candidates),
     }
+    from app.services.discovery_funnel import build_discovery_funnel
+    metadata["discovery_funnel"] = build_discovery_funnel(symbols, candidates, errors, top_candidates)
     return top_candidates, errors, metadata
