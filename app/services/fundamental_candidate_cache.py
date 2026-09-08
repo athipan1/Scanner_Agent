@@ -9,7 +9,7 @@ from typing import Any
 
 from app.models import ScannerCandidateContract
 
-CACHE_SCHEMA = "scanner-fundamental-candidate-cache.v1"
+CACHE_SCHEMA = "scanner-fundamental-candidate-cache.v2"
 _DEFAULT_TTL_SECONDS = 6 * 60 * 60
 _SAFE_KEY = re.compile(r"[^A-Z0-9._-]+")
 

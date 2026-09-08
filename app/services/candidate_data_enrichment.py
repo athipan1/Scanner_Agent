@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterable
 
 from app.data_sources.market_data import get_market_snapshot
 from app.services.opportunity_profile import build_opportunity_profile
+from app.services.financial_evidence_payload import build_financial_evidence_payload
 
 DATA_BUNDLE_SCHEMA_VERSION = "scanner-data-bundle.v1"
 
@@ -250,6 +251,7 @@ def build_fundamental_data_bundle(
         "schema_version": DATA_BUNDLE_SCHEMA_VERSION,
         "symbol": symbol,
         "sources": sources,
+        "financial_inputs": build_financial_evidence_payload(symbol, financials),
         "market_snapshot": market,
         "financial_statements": {
             "yf_symbol": financials.get("yf_symbol"),
