@@ -2,7 +2,7 @@ from alpaca.trading.client import TradingClient
 import os
 import sys
 
-def test_alpaca_connection():
+def check_alpaca_connection():
     """
     Tests the connection to the Alpaca API using the alpaca-py SDK.
     Exits with code 0 on success, 1 on failure.
@@ -36,5 +36,34 @@ def test_alpaca_connection():
         print(f"Failed to connect to Alpaca API: {e}")
         sys.exit(1)
 
+def test_alpaca_connection(monkeypatch):
+    """Exercise the CLI contract without credentials or broker network access."""
+    import pytest
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setenv("APCA_API_KEY_ID", "fixture-key")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "fixture-secret")
+
+    def client(key, secret, *, paper):
+        calls.append((key, secret, paper))
+        return SimpleNamespace(get_account=lambda: SimpleNamespace(status="ACTIVE"))
+
+    monkeypatch.setitem(check_alpaca_connection.__globals__, "TradingClient", client)
+    with pytest.raises(SystemExit) as result:
+        check_alpaca_connection()
+    assert result.value.code == 0
+    assert calls == [("fixture-key", "fixture-secret", True)]
+
+
+def test_alpaca_connection_missing_credentials(monkeypatch):
+    import pytest
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+    with pytest.raises(SystemExit) as result:
+        check_alpaca_connection()
+    assert result.value.code == 1
+
+
 if __name__ == "__main__":
-    test_alpaca_connection()
+    check_alpaca_connection()

@@ -1,6 +1,7 @@
 """Read-only Paper clock authority; quote/provider states cannot open a session."""
 
 import json
+import re
 from datetime import datetime, timezone
 from threading import Lock
 from time import monotonic
@@ -42,8 +43,22 @@ def read_broker_clock() -> dict:
 
 
 def _timestamp(value):
+    # Alpaca emits RFC3339 nanoseconds; Python 3.9's fromisoformat only
+    # supports 3/6 fractional digits. Normalize precision, never timezone.
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo is not None else None
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if not match:
+        return None
+    whole, fraction, offset = match.groups()
+    normalized = whole + ("." + fraction[:6].ljust(6, "0") if fraction else "")
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized + offset.replace("Z", "+00:00"))
         return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
     except (ValueError, TypeError):
         return None
