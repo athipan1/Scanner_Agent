@@ -11,6 +11,10 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.11']
     env:
       PYTHONPATH: ${{ github.workspace }}
 
@@ -21,7 +25,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
@@ -37,15 +41,13 @@ jobs:
         continue-on-error: true
         run: |
           python -m pytest -q --tb=short --disable-warnings \
-            app/test_main.py \
-            app/test_fundamental_score.py \
-            tests > pytest-results.txt 2>&1
+            > pytest-results.txt 2>&1
 
       - name: Upload pytest results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scanner-pytest-results
+          name: scanner-pytest-results-${{ matrix.python-version }}
           path: pytest-results.txt
           if-no-files-found: error
 

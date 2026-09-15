@@ -142,3 +142,25 @@ def test_clock_reader_cache_is_short_and_fetch_failure_never_returns_stale(monke
     failed = broker_session.read_broker_clock()
     assert "timestamp" not in failed and "is_open" not in failed
     assert failed["error"] == "OSError"
+
+
+@pytest.mark.parametrize("fraction", ["1", "19", "193", "1931", "19313", "193130", "1931309", "19313096", "193130963"])
+def test_alpaca_fractional_precision_on_runtime_python(fraction):
+    observed = datetime(2026, 9, 15, 9, 59, 13, tzinfo=timezone.utc)
+    result = validate_broker_clock(clock(
+        timestamp=f"2026-09-15T05:59:12.{fraction}-04:00", is_open=False,
+        next_open="2026-09-15T09:30:00-04:00",
+        next_close="2026-09-15T16:00:00-04:00",
+    ), observed)
+    assert result["valid"] is True
+    assert 0 < result["age_seconds"] < 1
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-09-09T14:52:35.123456789",  # timezone is mandatory
+    "2026-09-09T14:52:35.1234567890Z",  # malformed precision
+    "2026-09-09T14:52:35.123456789+25:00",
+    "2026-09-09T14:52:35.badZ", "2026-09-09T14:52:35Zjunk",
+])
+def test_nanosecond_support_does_not_accept_malformed_authority(timestamp):
+    assert validate_broker_clock(clock(timestamp=timestamp), NOW)["valid"] is False
