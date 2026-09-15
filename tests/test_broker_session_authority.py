@@ -164,3 +164,13 @@ def test_alpaca_fractional_precision_on_runtime_python(fraction):
 ])
 def test_nanosecond_support_does_not_accept_malformed_authority(timestamp):
     assert validate_broker_clock(clock(timestamp=timestamp), NOW)["valid"] is False
+
+
+@pytest.mark.parametrize('field', ['timestamp','next_open','next_close'])
+def test_invalid_timezone_minutes_are_not_silently_normalized(field):
+    # Python accepts +00:99 as +01:39; the broker contract must not.
+    value = clock()[field]
+    parsed = datetime.fromisoformat(value.replace('Z','+00:00'))
+    invalid = (parsed+timedelta(minutes=99)).strftime('%Y-%m-%dT%H:%M:%S')+'+00:99'
+    assert datetime.fromisoformat(invalid) == parsed
+    assert classify(broker_clock=clock(**{field:invalid}))['status'] == 'session_unverified'
