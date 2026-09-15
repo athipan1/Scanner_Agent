@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -9,7 +10,8 @@ client = TestClient(app)
 
 
 def test_us_default_inputs_return_real_watchlist_when_strict_scan_has_no_candidates():
-    with patch("app.main.scan_market", return_value=([], [ErrorDetail(symbol="AAPL", error="no buy signal")])):
+    ticker = SimpleNamespace(info={"currentPrice": 100, "marketCap": 1_000_000_000})
+    with patch("yfinance.Ticker", return_value=ticker), patch("app.main.scan_market", return_value=([], [ErrorDetail(symbol="AAPL", error="no buy signal")])):
         response = client.post("/scan", json={"symbols": ["AAPL"], "screener": "default", "exchange": "US"})
 
     assert response.status_code == 200
