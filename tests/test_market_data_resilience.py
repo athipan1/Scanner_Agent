@@ -17,6 +17,8 @@ class Client:
 def enable_alpaca(monkeypatch):
     monkeypatch.setattr(market_data, "_alpaca_configured", lambda: True)
     monkeypatch.setattr(market_data, "_alpaca_client", lambda: Client())
+    monkeypatch.setattr(market_data, "read_broker_clock", lambda: {
+        "source": "alpaca_paper_clock", "error": "fixture_clock_unavailable"})
 
 
 def test_reuses_existing_yfinance_info_and_accepts_partial_valuation(monkeypatch):

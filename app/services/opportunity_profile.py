@@ -298,6 +298,7 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
     critical = current_price is not None and dollar_volume is not None
     evidence_complete = atr_pct is not None and volume_ratio is not None
     quote_blocks_qualification = quote_status in {
+        "session_unverified",
         "market_closed",
         "stale_quote",
         "missing_quote_timestamp",
@@ -313,6 +314,9 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
     if fail_closed:
         status = "avoid"
         workflow_status = "fail_closed"
+    elif quote_status == "session_unverified":
+        status = "review"
+        workflow_status = "session_unverified"
     elif quote_status == "market_closed":
         status = "review"
         workflow_status = "market_closed"
@@ -378,7 +382,9 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
         reasons.append("strong_trend")
     if relative_volume >= 0.80:
         reasons.append("strong_relative_volume")
-    if quote_status == "market_closed":
+    if quote_status == "session_unverified":
+        reasons.append("broker_session_unverified")
+    elif quote_status == "market_closed":
         reasons.append("market_closed")
     elif quote_status == "stale_quote":
         reasons.append("stale_quote")
@@ -426,6 +432,8 @@ def build_opportunity_profile(data_bundle: Dict[str, Any]) -> Dict[str, Any]:
             "quote_status": quote_status,
             "market_session": market_session,
             "market_open": quote_quality.get("market_open", market.get("usMarketOpen")),
+            "session_source": quote_quality.get("session_source"),
+            "session_trace": market.get("session_trace"),
             "liquid_spread_sanity_max_bps": LIQUID_SPREAD_SANITY_MAX_BPS,
         },
         "evidence_quality": {

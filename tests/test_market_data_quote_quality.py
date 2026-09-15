@@ -1,6 +1,14 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.data_sources.market_data import classify_quote_quality
+
+
+def broker_clock(observed, is_open=True):
+    return {"source": "alpaca_paper_clock", "timestamp": observed.isoformat(),
+            "is_open": is_open,
+            "next_open": (observed + timedelta(days=1)).isoformat(),
+            "next_close": (observed + timedelta(hours=5) if is_open else observed + timedelta(days=1, hours=7)).isoformat()}
+
 
 
 def test_regular_session_recent_quote_is_fresh():
@@ -10,6 +18,7 @@ def test_regular_session_recent_quote_is_fresh():
         market_state="REGULAR",
         quote_timestamp=datetime(2026, 8, 20, 14, 59, 30, tzinfo=timezone.utc),
         observed_at=observed_at,
+        broker_clock=broker_clock(observed_at),
         stale_after_seconds=300,
     )
 
@@ -27,6 +36,7 @@ def test_regular_session_old_quote_is_stale_quote():
         market_state="REGULAR",
         quote_timestamp=datetime(2026, 8, 20, 14, 50, 0, tzinfo=timezone.utc),
         observed_at=observed_at,
+        broker_clock=broker_clock(observed_at),
         stale_after_seconds=300,
     )
 
@@ -40,6 +50,7 @@ def test_after_hours_quote_is_market_closed_not_provider_failure():
     result = classify_quote_quality(
         requested_exchange="NASDAQ",
         market_state="POST",
+        broker_clock=broker_clock(observed_at, False),
         quote_timestamp=datetime(2026, 8, 20, 21, 59, 55, tzinfo=timezone.utc),
         observed_at=observed_at,
     )
@@ -49,17 +60,18 @@ def test_after_hours_quote_is_market_closed_not_provider_failure():
     assert result["market_open"] is False
 
 
-def test_provider_closed_state_wins_over_weekday_clock_for_holiday_safety():
+def test_broker_closed_state_wins_over_weekday_clock_for_holiday_safety():
     observed_at = datetime(2026, 12, 25, 15, 0, 0, tzinfo=timezone.utc)
     result = classify_quote_quality(
         requested_exchange="NYSE",
-        market_state="CLOSED",
+        market_state="REGULAR",
+        broker_clock=broker_clock(observed_at, False),
         quote_timestamp=datetime(2026, 12, 24, 20, 59, 0, tzinfo=timezone.utc),
         observed_at=observed_at,
     )
 
     assert result["status"] == "market_closed"
-    assert result["session_source"] == "provider_market_state"
+    assert result["session_source"] == "alpaca_paper_clock"
 
 
 def test_non_us_exchange_is_not_applicable():

@@ -11,6 +11,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
 
 from app.config import settings
+from app.data_sources.broker_session import read_broker_clock, validate_broker_clock
 from app.utils.symbol_mapper import map_symbol_for_yfinance
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,8 @@ _INFO_FIELDS = (
     "currency",
     "exchange",
     "marketState",
+    "regularMarketTime",
+    "exchangeTimezoneName",
     "averageVolume",
     "averageVolume10days",
     "averageDailyVolume10Day",
@@ -84,6 +87,9 @@ _US_EQUITY_EXCHANGES = {
     "BATS",
     "IEX",
     "NASDAQ",
+    "US",
+    "USA",
+    "NCM",
     "NGM",
     "NMS",
     "NYSE",
@@ -279,6 +285,8 @@ def classify_quote_quality(
     quote_timestamp: Any = None,
     observed_at: Optional[datetime] = None,
     stale_after_seconds: int = DEFAULT_QUOTE_STALE_AFTER_SECONDS,
+    broker_clock: Optional[Dict[str, Any]] = None,
+    require_broker_clock: bool = True,
 ) -> Dict[str, Any]:
     """Classify quote freshness without treating a closed US session as a provider failure."""
 
@@ -298,13 +306,29 @@ def classify_quote_quality(
     provider_session = _normalize_market_state(market_state)
     session = provider_session or _clock_market_session(observed)
     session_source = "provider_market_state" if provider_session else "weekday_clock"
+    clock_trace = None
+    if require_broker_clock or broker_clock is not None:
+        clock_trace = validate_broker_clock(broker_clock or {}, observed)
+        session_source = "alpaca_paper_clock"
+        if not clock_trace["valid"]:
+            session = "unverified"
+        elif clock_trace["is_open"]:
+            session = "regular"
+        else:
+            # Calendar labels are descriptive only. Broker closure is authoritative,
+            # including holidays and early closes during nominal weekday hours.
+            local_session = _clock_market_session(observed)
+            session = local_session if local_session != "regular" else "closed"
     parsed_quote = _coerce_utc_datetime(quote_timestamp)
     quote_age_seconds = None
     if parsed_quote is not None:
         quote_age_seconds = round((observed - parsed_quote).total_seconds(), 3)
 
     threshold = max(1, int(stale_after_seconds))
-    if session != "regular":
+    if session == "unverified":
+        status = "session_unverified"
+        quote_is_fresh = False
+    elif session != "regular":
         status = "market_closed"
         quote_is_fresh = False
     elif parsed_quote is None:
@@ -328,9 +352,18 @@ def classify_quote_quality(
         "quote_is_fresh": quote_is_fresh,
         "quote_age_seconds": quote_age_seconds,
         "market_session": session,
-        "market_open": session == "regular",
+        "market_open": None if session == "unverified" else session == "regular",
         "session_source": session_source,
         "stale_after_seconds": threshold,
+        "observed_at": observed.isoformat(),
+        "observed_at_eastern": observed.astimezone(_US_EASTERN).isoformat(),
+        "provider_market_state": market_state,
+        "provider_market_session": provider_session,
+        "provider_session_mismatch": (
+            provider_session != session if provider_session and clock_trace
+            and clock_trace["valid"] else None
+        ),
+        "broker_clock": clock_trace,
     }
 
 
@@ -526,6 +559,7 @@ def _build_simulated_market_snapshot(
         market_state="REGULAR",
         quote_timestamp=quote_timestamp,
         observed_at=observed_at,
+        require_broker_clock=False,  # isolated dev fixture, broker_orders_allowed=False
     )
     snapshot["quote_quality"] = quote_quality
     snapshot["quoteQualityStatus"] = quote_quality["status"]
@@ -755,13 +789,46 @@ def get_market_snapshot(
                 snapshot["averageVolume"] = snapshot["historicalAverageVolume20d"]
                 field_sources["averageVolume"] = "yfinance_execution_history"
 
+    is_us_equity = _is_us_equity_exchange(exchange, snapshot.get("exchange"))
+    broker_clock = read_broker_clock() if is_us_equity and _alpaca_configured() else {}
+    # Measure freshness after all provider I/O, not before a potentially long fetch.
+    completed_at = datetime.now(timezone.utc)
     quote_quality = classify_quote_quality(
         requested_exchange=exchange,
         provider_exchange=snapshot.get("exchange"),
         market_state=snapshot.get("marketState"),
         quote_timestamp=snapshot.get("alpacaQuoteTimestamp"),
-        observed_at=observed_at,
+        observed_at=completed_at,
+        broker_clock=broker_clock if is_us_equity else None,
+        require_broker_clock=is_us_equity,
     )
+    snapshot["session_trace"] = {
+        "schema_version": "scanner-broker-session.v1",
+        "symbol": clean_symbol, "requested_exchange": exchange,
+        "provider_exchange": snapshot.get("exchange"),
+        "provider_timezone": snapshot.get("exchangeTimezoneName"),
+        "provider_timestamp": snapshot.get("regularMarketTime"),
+        "provider_session_observed_at": info.get("fetched_at") if yfinance_info else None,
+        "provider_metadata_reused": bool(yfinance_info),
+        "snapshot_started_at": observed_at.isoformat(),
+        "snapshot_completed_at": completed_at.isoformat(),
+        "quote_timestamp": snapshot.get("alpacaQuoteTimestamp"),
+        **quote_quality,
+    }
+    snapshot["session_trace"]["provider_session"] = {
+        "market_state": snapshot.get("marketState"),
+        "market_session": quote_quality.get("provider_market_session"),
+        "metadata_reused": bool(yfinance_info),
+        "timestamp": snapshot.get("regularMarketTime"),
+        "timezone": snapshot.get("exchangeTimezoneName"),
+        "exchange": snapshot.get("exchange"),
+        "execution_authority": False,
+    }
+    snapshot["session_trace"]["broker_execution_session"] = {
+        "market_session": quote_quality["market_session"],
+        "market_open": quote_quality["market_open"],
+        "authority": quote_quality.get("broker_clock"),
+    }
     snapshot["quote_quality"] = quote_quality
     snapshot["quoteQualityStatus"] = quote_quality["status"]
     snapshot["alpacaQuoteAgeSeconds"] = quote_quality["quote_age_seconds"]
