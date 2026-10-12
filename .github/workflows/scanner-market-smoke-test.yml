@@ -18,9 +18,10 @@ on:
       - "tests/test_yfinance_frames.py"
       - ".github/workflows/scanner-market-smoke-test.yml"
   schedule:
-    # 15:00 UTC is inside the US regular session in both EDT and EST.
-    # This is 22:00 Thailand time.
-    - cron: "0 15 * * 1-5"
+    # 15:17 UTC stays inside US regular hours in both EDT and EST.
+    # Avoid the top-of-hour GitHub Actions scheduling congestion.
+    # A delayed run must still fail if its candidates are not in regular session.
+    - cron: "17 15 * * 1-5"
 
 jobs:
   scanner-market-smoke-test:
