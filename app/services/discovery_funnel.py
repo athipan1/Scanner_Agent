@@ -7,6 +7,26 @@ def build_discovery_funnel(symbols, candidates, errors, selected):
     errors_by_symbol = {e.symbol: str(e.error) for e in errors}
     analyzed_symbols = {c.symbol for c in candidates}
     cutoff = min((c.candidate_score or 0.0 for c in selected), default=None)
+    # The fundamental discovery endpoint has NOT fetched nested-OOS bar
+    # history or generated an executable BUY verdict. Publish these unknowns
+    # explicitly instead of treating high-ranked stocks as trade-ready.
+    readiness = []
+    for candidate in selected:
+        metadata = getattr(candidate, 'metadata', None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        raw_scores = getattr(candidate, 'raw_scores', None)
+        raw_scores = raw_scores if isinstance(raw_scores, dict) else {}
+        coverage = raw_scores.get('evidence_coverage', metadata.get('evidence_coverage'))
+        readiness.append({
+            'symbol': candidate.symbol,
+            'ranked_fundamental_score': candidate.candidate_score,
+            'fundamental_coverage_observed': coverage,
+            'historical_bars_observed': None,
+            'nested_oos_history_eligible': None,
+            'buy_verdict': 'not_evaluated',
+            'production_entry_authorized': False,
+            'next_research_gate': 'verify_882_daily_bars_and_sealed_holdout',
+        })
     rejections = []
     for rank, candidate in enumerate(candidates, 1):
         if candidate.symbol not in selected_symbols:
@@ -30,4 +50,9 @@ def build_discovery_funnel(symbols, candidates, errors, selected):
         'fundamental_ranked_count': len(candidates), 'enrichment_pool_count': len(selected),
         'buy_recommendation_required_at_scanner': False,
         'selection_basis': 'weighted_fundamental_score_then_evidence_quality_growth_tiebreakers',
-        'rejections': rejections, 'thresholds_relaxed': False}
+        'rejections': rejections, 'thresholds_relaxed': False,
+        'research_readiness': {'schema_version': 'scanner-research-readiness.v1',
+            'history_fetch_performed': False, 'buy_verdict_evaluated': False,
+            'ranked_candidates': readiness,
+            'safe_next_step': 'Manager validates 882 1d bars before exact nested-OOS; no scanner BUY permission',
+            'production_authority_granted': False}}
